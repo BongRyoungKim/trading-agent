@@ -1,0 +1,29 @@
+services:
+  trading-agent:
+    build: .
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    command: ["--mode", "paper", "--symbols", "BTC/USDT", "ETH/USDT", "--interval", "60"]
+
+  # Run a one-shot backtest and exit
+  backtest:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+    profiles: ["backtest"]
+    entrypoint: ["python", "-m", "src.backtest_cli"]
