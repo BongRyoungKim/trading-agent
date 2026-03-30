@@ -29,8 +29,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bars", type=int, default=1000, help="Number of historical bars (default: 1000)")
     p.add_argument("--capital", type=float, default=10000.0, help="Initial capital (default: 10000)")
     p.add_argument("--commission", type=float, default=0.001, help="Commission rate (default: 0.001)")
-    p.add_argument("--strategy", default="ma_crossover_ema_20_50",
-                   help="Strategy name from registry (default: ma_crossover_ema_20_50)")
+    p.add_argument("--strategy", default="MACrossoverStrategy",
+                   help="Strategy name from registry (default: MACrossoverStrategy)")
 
     # Optimization flags
     p.add_argument("--optimize", action="store_true", help="Run grid search optimization")
@@ -55,7 +55,7 @@ def _load_data(symbol: str, timeframe: str, bars: int):
     """Load OHLCV data from exchange (paper mode, no auth needed)."""
     from src.exchange.binance import BinanceClient
     settings = get_settings()
-    client = BinanceClient(api_key="", secret_key="", sandbox=True)
+    client = BinanceClient(api_key="", secret_key="", testnet=True)
     logger.info("Fetching data", symbol=symbol, timeframe=timeframe, bars=bars)
     df = client.get_ohlcv_dataframe(symbol, timeframe=timeframe, limit=bars)
     logger.info("Data loaded", rows=len(df))

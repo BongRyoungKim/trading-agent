@@ -44,11 +44,11 @@ class Scalping5mStrategy(BaseStrategy):
     def __init__(
         self,
         symbol: str,
-        ema_fast: int = 9,
-        ema_slow: int = 21,
-        rsi_period: int = 7,
-        rsi_min: float = 38.0,
-        overbought: float = 78.0,
+        ema_fast: int = 5,
+        ema_slow: int = 13,
+        rsi_period: int = 6,
+        rsi_min: float = 25.0,
+        overbought: float = 80.0,
         atr_period: int = 14,
     ) -> None:
         if ema_fast >= ema_slow:
@@ -70,11 +70,11 @@ class Scalping5mStrategy(BaseStrategy):
 
     @property
     def timeframe(self) -> str:
-        return "5m"
+        return "3m"
 
     def min_required_bars(self) -> int:
         # EMA slow needs ~2x period for warmup; MACD needs 26+9; pick max
-        return max(self._ema_slow * 2, 35, self._atr_period + 1)
+        return max(self._ema_slow * 2, 26, self._atr_period + 1)
 
     def get_parameters(self) -> dict:
         return {
@@ -118,7 +118,7 @@ class Scalping5mStrategy(BaseStrategy):
         golden_cross = ema_f_prev <= ema_s_prev and ema_f_now > ema_s_now
         death_cross = ema_f_prev >= ema_s_prev and ema_f_now < ema_s_now
         above_ema = ema_f_now > ema_s_now
-        macd_turned_positive = hist_prev <= 0 < hist_now
+        macd_turned_positive = hist_now > 0  # relaxed: histogram positive (not just turn)
         macd_turned_negative = hist_prev >= 0 > hist_now
 
         current_price = float(close.iloc[-1])

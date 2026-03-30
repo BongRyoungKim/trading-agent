@@ -208,6 +208,10 @@ class PortfolioTracker:
             total_commission=self._total_commission,
         )
 
+    def sync_cash(self, actual_cash: Decimal) -> None:
+        """Overwrite internal cash with the real exchange KRW balance (live mode only)."""
+        self._cash = actual_cash
+
     @property
     def cash(self) -> Decimal:
         return self._cash

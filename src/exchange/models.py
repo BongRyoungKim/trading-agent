@@ -54,9 +54,12 @@ class Order:
     filled: Decimal
     status: OrderStatus
     created_at: datetime
+    fee: Decimal | None = None
 
     @classmethod
     def from_ccxt(cls, data: dict) -> "Order":
+        fee_raw = data.get("fee")
+        fee = Decimal(str(fee_raw["cost"])) if isinstance(fee_raw, dict) and fee_raw.get("cost") else None
         return cls(
             id=str(data["id"]),
             symbol=data["symbol"],
@@ -69,6 +72,7 @@ class Order:
             created_at=datetime.fromtimestamp(data["timestamp"] / 1000)
             if data.get("timestamp")
             else datetime.now(UTC),
+            fee=fee,
         )
 
 

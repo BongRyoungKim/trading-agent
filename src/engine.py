@@ -86,8 +86,10 @@ class TradingEngine:
         self._stop_event = threading.Event()
         self._paused = False
         self._paused_lock = threading.Lock()
+        self._buy_lock = threading.Lock()  # prevents simultaneous BUY races across symbols
         self._initial_capital: Decimal | None = None  # captured at start for daily report
         self._latest_ticks: dict[str, dict] = {}  # symbol → latest tick result
+        self._sync_anchor: str = ""  # first symbol in the list — triggers KRW sync
         self._journal = (
             TradeJournal.from_store(journal_store)
             if journal_store is not None
@@ -162,6 +164,16 @@ class TradingEngine:
             logger.debug("Outside trading hours, tick skipped", symbol=symbol)
             return
 
+        # ── Live: sync portfolio cash with real KRW balance once per cycle ───
+        if self._mode == "live" and symbol == self._sync_anchor:
+            try:
+                bal = self._exchange.get_balance()
+                krw = bal.get("KRW")
+                if krw is not None:
+                    self._portfolio.sync_cash(Decimal(str(krw.free)))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("KRW balance sync failed", error=str(exc))
+
         try:
             with self._circuit_breaker:
                 self._process_symbol(symbol)
@@ -200,6 +212,7 @@ class TradingEngine:
         """
         self._initial_capital = self._portfolio.cash
         self._start_time = time.monotonic()
+        self._sync_anchor = symbols[0] if symbols else ""
 
         logger.info(
             "TradingEngine starting",
@@ -302,7 +315,7 @@ class TradingEngine:
         if self._portfolio.has_position(symbol):
             pos = self._portfolio.get_position(symbol)
             ticker = self._exchange.get_ticker(symbol)
-            price = ticker.last_price
+            price = ticker.last
 
             # ── Step 1a: trailing stop ratchet ────────────────────────────────
             trailing_pct = pos.trailing_stop_pct if pos.trailing_stop_pct is not None \
@@ -364,7 +377,24 @@ class TradingEngine:
 
         has_pos = self._portfolio.has_position(symbol)
         if signal_.action == SignalAction.BUY and not has_pos:
-            self._open_position(symbol)
+            if self._portfolio.cash < Decimal("10000"):
+                logger.info(
+                    "Cash < 10,000 KRW — buy cancelled until next evaluation",
+                    symbol=symbol,
+                    cash=float(self._portfolio.cash),
+                )
+                return
+            # Acquire lock to prevent simultaneous buys across parallel symbol threads
+            if not self._buy_lock.acquire(blocking=False):
+                logger.debug("Buy lock busy — skipping concurrent open", symbol=symbol)
+                return
+            try:
+                # Re-check cash inside lock (another thread may have just spent it)
+                if self._portfolio.cash < Decimal("10000"):
+                    return
+                self._open_position(symbol)
+            finally:
+                self._buy_lock.release()
         elif signal_.action == SignalAction.SELL and has_pos:
             self._close_position(symbol)
 
@@ -372,9 +402,14 @@ class TradingEngine:
 
     def _open_position(self, symbol: str) -> None:
         ticker = self._exchange.get_ticker(symbol)
-        price = ticker.last_price
+        price = ticker.last
 
         stop_loss = self._risk_manager.calculate_stop_loss(price, side="buy")
+        # Take profit: 3× the stop-loss distance (minimum 15% above entry)
+        sl_distance = price - stop_loss
+        tp_distance = max(sl_distance * Decimal("3"), price * Decimal("0.15"))
+        take_profit = price + tp_distance
+
         amount = fixed_fraction(
             capital=self._portfolio.cash,
             risk_fraction=self._settings.max_position_risk,
@@ -386,6 +421,24 @@ class TradingEngine:
             logger.warning("Position sizing returned zero amount, skipping", symbol=symbol)
             return
 
+        # ── Cap notional at 95% of available cash (leave 5% for fees/rounding) ─
+        max_notional = self._portfolio.cash * Decimal("0.95")
+        max_amount = max_notional / price
+        if amount > max_amount:
+            amount = max_amount
+
+        # ── Minimum order size: 10,000 KRW ───────────────────────────────────
+        _MIN_KRW = Decimal("10000")
+        min_amount = _MIN_KRW / price
+        if amount < min_amount:
+            logger.info(
+                "Amount below minimum — bumping to 10,000 KRW",
+                symbol=symbol,
+                original=float(amount),
+                adjusted=float(min_amount),
+            )
+            amount = min_amount
+
         try:
             self._risk_manager.check_can_open_position()
         except RiskError as exc:
@@ -394,7 +447,24 @@ class TradingEngine:
             return
 
         if self._mode == "live":
-            order = self._exchange.place_order(symbol, "buy", amount)
+            try:
+                order = self._exchange.place_order(symbol, "buy", amount)
+            except Exception as exc:  # noqa: BLE001
+                # Sync cash with actual exchange balance and abort
+                logger.warning(
+                    "Buy order failed — syncing cash and skipping",
+                    symbol=symbol,
+                    amount=float(amount),
+                    error=str(exc),
+                )
+                try:
+                    bal = self._exchange.get_balance()
+                    krw = bal.get("KRW")
+                    if krw is not None:
+                        self._portfolio.sync_cash(Decimal(str(krw.free)))
+                except Exception:  # noqa: BLE001
+                    pass
+                return
             fill_price = order.price if order.price > 0 else price
             commission = price * amount * self._PAPER_COMMISSION_RATE
             if order.fee is not None:
@@ -420,6 +490,7 @@ class TradingEngine:
             entry_price=fill_price,
             commission=commission,
             stop_loss=stop_loss,
+            take_profit=take_profit,
             trailing_stop_pct=self._trailing_stop_pct,
         )
         self._risk_manager.on_position_opened()
@@ -448,10 +519,20 @@ class TradingEngine:
             price = forced_price
         else:
             ticker = self._exchange.get_ticker(symbol)
-            price = ticker.last_price
+            price = ticker.last
 
         if self._mode == "live":
-            order = self._exchange.place_order(symbol, "sell", position.amount)
+            try:
+                order = self._exchange.place_order(symbol, "sell", position.amount)
+            except Exception as exc:
+                logger.error(
+                    "Sell order failed — removing position to prevent retry loop",
+                    symbol=symbol,
+                    amount=float(position.amount),
+                    error=str(exc),
+                )
+                self._portfolio.close_position(symbol, price, commission=Decimal("0"))
+                return
             fill_price = order.price if order.price > 0 else price
             commission = price * position.amount * self._PAPER_COMMISSION_RATE
             if order.fee is not None:
@@ -559,23 +640,55 @@ class TradingEngine:
         """
         local_symbols = set(self._portfolio.open_symbols())
         tracked = set(symbols)
+        registered = 0
 
-        for sym in tracked:
-            has_local = sym in local_symbols
+        # ── Sync external holdings into portfolio ─────────────────────────────
+        if self._mode == "live":
             try:
-                ticker = self._exchange.get_ticker(sym)
-                # Use ticker availability as a proxy for exchange reachability.
-                # Full balance reconciliation is exchange-specific; we flag mismatches.
-                if has_local:
-                    logger.debug("Reconciled local position exists", symbol=sym)
+                balance = self._exchange.get_balance()
+                for sym in tracked:
+                    if sym in local_symbols:
+                        continue  # already tracked
+                    base_coin = sym.split("/")[0]
+                    bal_entry = balance.get(base_coin)
+                    if bal_entry is None:
+                        continue
+                    free_amount = Decimal(str(bal_entry.free))
+                    if free_amount <= Decimal("0"):
+                        continue
+                    # Register with current market price as synthetic entry
+                    try:
+                        ticker = self._exchange.get_ticker(sym)
+                        entry_price = ticker.last
+                    except Exception:  # noqa: BLE001
+                        continue
+                    # Apply same SL/TP as normal opens so reconciled positions auto-close
+                    recon_sl = entry_price * (Decimal("1") - Decimal(str(self._settings.max_position_risk)))
+                    recon_sl_dist = entry_price - recon_sl
+                    recon_tp_dist = max(recon_sl_dist * Decimal("3"), entry_price * Decimal("0.15"))
+                    recon_tp = entry_price + recon_tp_dist
+                    self._portfolio.open_position(
+                        symbol=sym,
+                        side="buy",
+                        amount=free_amount,
+                        entry_price=entry_price,
+                        commission=Decimal("0"),
+                        stop_loss=recon_sl,
+                        take_profit=recon_tp,
+                        trailing_stop_pct=self._trailing_stop_pct,
+                    )
+                    logger.info(
+                        "Reconciliation: registered external holding",
+                        symbol=sym,
+                        amount=float(free_amount),
+                        entry_price=float(entry_price),
+                    )
+                    registered += 1
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Reconciliation: could not fetch ticker",
-                    symbol=sym,
-                    error=str(exc),
-                )
+                logger.warning("Reconciliation: balance fetch failed", error=str(exc))
 
         # Warn about local positions for symbols outside the trading list
+        local_symbols = set(self._portfolio.open_symbols())  # refresh after registration
         ghost_symbols = local_symbols - tracked
         for sym in ghost_symbols:
             logger.warning(
@@ -587,11 +700,26 @@ class TradingEngine:
                 f"Untracked open position detected: {sym}. Verify manually."
             )
 
+        # ── Sync cash immediately after reconciliation to fix negative values ──
+        if self._mode == "live":
+            try:
+                bal = self._exchange.get_balance()
+                krw = bal.get("KRW")
+                if krw is not None:
+                    self._portfolio.sync_cash(Decimal(str(krw.free)))
+                    logger.info(
+                        "Cash synced after reconciliation",
+                        cash=float(krw.free),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Post-reconciliation cash sync failed", error=str(exc))
+
         logger.info(
             "Position reconciliation complete",
             local_open=len(local_symbols),
             tracked_symbols=len(tracked),
             ghost_symbols=len(ghost_symbols),
+            registered_from_exchange=registered,
         )
 
     # ── Internal: lifecycle ───────────────────────────────────────────────────
@@ -632,9 +760,10 @@ class TradingEngine:
         )
 
     def _send_heartbeat(self) -> None:
-        """Scheduled job: log liveness + optional Telegram heartbeat."""
+        """Scheduled job: log liveness + send hourly summary or heartbeat."""
         try:
             report = self._portfolio.pnl_report()
+            stats = self._journal.stats()
             circuit_state = self._circuit_breaker.state.name
             logger.info(
                 "Heartbeat",
@@ -643,11 +772,28 @@ class TradingEngine:
                 realized_pnl=report["realized_pnl"],
                 circuit=circuit_state,
             )
-            self._telegram.send_heartbeat(
-                open_positions=report["open_positions"],
-                cash=float(report["cash"]),
-                circuit_state=circuit_state,
-            )
+            if self._telegram._hourly_summary:  # noqa: SLF001
+                self._telegram.flush_summary(
+                    mode=self._mode,
+                    paused=self.is_paused,
+                    circuit_state=circuit_state,
+                    open_positions=report["open_positions"],
+                    cash=float(report["cash"]),
+                    realized_pnl=float(report["realized_pnl"]),
+                    total_trades=stats["total_trades"],
+                    wins=stats["wins"],
+                    losses=stats["losses"],
+                    win_rate_pct=stats["win_rate_pct"],
+                    profit_factor=float(stats["profit_factor"]) if stats["profit_factor"] != float("inf") else 999.0,
+                    avg_win=stats["avg_win"],
+                    avg_loss=stats["avg_loss"],
+                )
+            else:
+                self._telegram.send_heartbeat(
+                    open_positions=report["open_positions"],
+                    cash=float(report["cash"]),
+                    circuit_state=circuit_state,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.error("Heartbeat failed", error=str(exc))
 

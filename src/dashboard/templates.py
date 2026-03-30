@@ -98,7 +98,7 @@ def render_dashboard(
 <main>
   <!-- Top stat cards -->
   <div class="top-grid">
-    <div class="card">
+    <div class="card" id="status-card">
       <h2>엔진 상태</h2>
       <div class="stat-row"><span class="stat-label">모드</span>{mode_badge}</div>
       <div class="stat-row"><span class="stat-label">상태</span>{state_badge}</div>
@@ -167,6 +167,9 @@ async function refresh() {{
       fetch('/api/ticks').then(r=>r.json()),
     ]);
     document.getElementById('meta').textContent = '새로고침: ' + new Date().toLocaleTimeString();
+    renderStatus(s);
+    renderPnl(pnl);
+    renderStats(stats);
     renderEquity(eq);
     renderBalance(bal);
     renderTicks(ticks);
@@ -177,6 +180,66 @@ async function refresh() {{
     if (tabs[1]) tabs[1].textContent = `매수 이력 (${{trades.length}})`;
     if (tabs[2]) tabs[2].textContent = `매도 이력 (${{trades.length}})`;
   }} catch(e) {{ console.warn('Refresh failed', e); }}
+}}
+function mkBadge(text, color) {{
+  return `<span class="badge" style="background:${{color}}20;color:${{color}}">${{text}}</span>`;
+}}
+function renderStatus(s) {{
+  const el = document.getElementById('status-card');
+  if (!el) return;
+  const mode = (s.mode || 'unknown').toUpperCase();
+  const paused = s.paused || false;
+  const circuit = s.circuit || 'UNKNOWN';
+  const hours = s.trading_hours || '24/7';
+  const days = s.trading_days || 'all';
+  const stateBadge = paused ? mkBadge('PAUSED','#f59e0b') : mkBadge('RUNNING','#10b981');
+  const circuitBadge = mkBadge(circuit, circuit !== 'CLOSED' ? '#ef4444' : '#10b981');
+  const modeBadge = mkBadge(mode, '#6366f1');
+  el.innerHTML = `<h2>엔진 상태</h2>
+    <div class="stat-row"><span class="stat-label">모드</span>${{modeBadge}}</div>
+    <div class="stat-row"><span class="stat-label">상태</span>${{stateBadge}}</div>
+    <div class="stat-row"><span class="stat-label">서킷 브레이커</span>${{circuitBadge}}</div>
+    <div class="stat-row"><span class="stat-label">거래 시간</span><span class="stat-value" style="font-size:.78rem;color:#94a3b8">${{hours}} UTC | Days: ${{days}}</span></div>`;
+}}
+function renderPnl(pnl) {{
+  const el = document.getElementById('pnl-card');
+  if (!el) return;
+  const cash = pnl.cash || 0;
+  const realized = pnl.realized_pnl || 0;
+  const unrealized = pnl.unrealized_pnl || 0;
+  const fmtVal = v => {{
+    const sign = v >= 0 ? '+' : '-';
+    const cls = v >= 0 ? 'win' : 'loss';
+    return `<span class="${{cls}}">${{sign}}₩${{Math.round(Math.abs(v)).toLocaleString('ko-KR')}}</span>`;
+  }};
+  el.innerHTML = `<h2>포트폴리오</h2>
+    <div class="stat-row"><span class="stat-label">현금 잔고</span><span class="stat-value">₩${{Math.round(cash).toLocaleString('ko-KR')}}</span></div>
+    <div class="stat-row"><span class="stat-label">실현 손익</span><span class="stat-value">${{fmtVal(realized)}}</span></div>
+    <div class="stat-row"><span class="stat-label">미실현 손익</span><span class="stat-value">${{fmtVal(unrealized)}}</span></div>`;
+}}
+function renderStats(stats) {{
+  const el = document.getElementById('stats-card');
+  if (!el) return;
+  const total = stats.total_trades || 0;
+  if (!total) {{ el.innerHTML = '<h2>성과 분석</h2><p class="empty">거래 없음</p>'; return; }}
+  const wr = stats.win_rate_pct || 0;
+  const pf = stats.profit_factor || 0;
+  const avgWin = stats.avg_win || 0;
+  const avgLoss = stats.avg_loss || 0;
+  const totalPnl = stats.total_pnl || 0;
+  const wrColor = wr >= 50 ? '#10b981' : '#ef4444';
+  const pfDisplay = pf >= 999 ? '∞' : pf.toFixed(2);
+  const pnlCls = totalPnl >= 0 ? 'win' : 'loss';
+  const sign = totalPnl >= 0 ? '+' : '';
+  const fmtKRW = v => Math.round(Math.abs(v)).toLocaleString('ko-KR');
+  el.innerHTML = `<h2>성과 분석 (${{total}}건)</h2>
+    <div class="stats-grid">
+      <div class="stat-box"><div class="val" style="color:${{wrColor}}">${{wr.toFixed(1)}}%</div><div class="lbl">승률</div></div>
+      <div class="stat-box"><div class="val">${{pfDisplay}}</div><div class="lbl">수익 팩터</div></div>
+      <div class="stat-box"><div class="val win">+₩${{fmtKRW(avgWin)}}</div><div class="lbl">평균 수익</div></div>
+      <div class="stat-box"><div class="val loss">-₩${{fmtKRW(avgLoss)}}</div><div class="lbl">평균 손실</div></div>
+      <div class="stat-box"><div class="val ${{pnlCls}}">${{sign}}₩${{fmtKRW(totalPnl)}}</div><div class="lbl">총 손익</div></div>
+    </div>`;
 }}
 function renderTicks(items) {{
   const el = document.getElementById('ticks-body');
@@ -278,22 +341,51 @@ function renderSellHistory(trades) {{
 }}
 function renderEquity(pts) {{
   const wrap = document.getElementById('chart-wrap');
-  if (!pts || pts.length < 2) {{ wrap.innerHTML = '<p class="empty">거래 없음</p>'; return; }}
-  const vals = pts.map(p => p.pnl);
-  const min = Math.min(...vals), max = Math.max(...vals);
-  const range = max - min || 1;
-  const W = 1000, H = 160, pad = 10;
-  const xs = pts.map((_,i) => pad + i/(pts.length-1)*(W-pad*2));
-  const ys = vals.map(v => pad + (1-(v-min)/range)*(H-pad*2));
-  const d = xs.map((x,i) => (i===0?'M':'L')+x.toFixed(1)+' '+ys[i].toFixed(1)).join(' ');
-  const lastY = ys[ys.length-1];
-  const lineColor = vals[vals.length-1] >= 0 ? '#10b981' : '#ef4444';
-  const lastVal = vals[vals.length-1];
-  const sign = lastVal >= 0 ? '+' : '';
+  if (!pts || pts.length === 0) {{ wrap.innerHTML = '<p class="empty">거래 없음 — 첫 청산 후 표시됩니다</p>'; return; }}
+  // Aggregate by date: compute daily PnL change
+  const byDate = {{}};
+  let prevPnl = 0;
+  pts.forEach(p => {{
+    const date = p.time ? p.time.substring(0, 10) : 'unknown';
+    const pnl = p.pnl || 0;
+    if (!(date in byDate)) byDate[date] = {{ start: prevPnl, end: pnl }};
+    else byDate[date].end = pnl;
+    prevPnl = pnl;
+  }});
+  const dates = Object.keys(byDate).sort();
+  if (dates.length === 0) {{ wrap.innerHTML = '<p class="empty">거래 없음</p>'; return; }}
+  const dailyPnls = dates.map(d => byDate[d].end - byDate[d].start);
+  const maxAbs = Math.max(...dailyPnls.map(Math.abs), 1);
+  const W = 1000, H = 160, padL = 10, padR = 10, padT = 20, padB = 25;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const barW = Math.max(4, chartW / dates.length - 2);
+  const zeroY = padT + chartH / 2;
+  let bars = '';
+  let labels = '';
+  dates.forEach((date, i) => {{
+    const v = dailyPnls[i];
+    const x = padL + (i + 0.5) * chartW / dates.length - barW / 2;
+    const barH = Math.abs(v) / maxAbs * (chartH / 2 - 4);
+    const color = v >= 0 ? '#10b981' : '#ef4444';
+    const y = v >= 0 ? zeroY - barH : zeroY;
+    bars += `<rect x="${{x.toFixed(1)}}" y="${{y.toFixed(1)}}" width="${{barW.toFixed(1)}}" height="${{barH.toFixed(1)}}" fill="${{color}}" rx="1"/>`;
+    const sign = v >= 0 ? '+' : '';
+    const labelY = v >= 0 ? y - 3 : y + barH + 10;
+    bars += `<text x="${{(x+barW/2).toFixed(1)}}" y="${{labelY.toFixed(1)}}" fill="${{color}}" font-size="9" text-anchor="middle">${{sign}}${{Math.round(v).toLocaleString('ko-KR')}}</text>`;
+    // Date label every N bars to avoid crowding
+    const step = Math.max(1, Math.ceil(dates.length / 10));
+    if (i % step === 0) {{
+      labels += `<text x="${{(x+barW/2).toFixed(1)}}" y="${{(H-5).toFixed(1)}}" fill="#64748b" font-size="9" text-anchor="middle">${{date.substring(5)}}</text>`;
+    }}
+  }});
+  const totalPnl = pts[pts.length-1].pnl || 0;
+  const sign = totalPnl >= 0 ? '+' : '';
+  const totalColor = totalPnl >= 0 ? '#10b981' : '#ef4444';
   wrap.innerHTML = `<svg viewBox="0 0 ${{W}} ${{H}}" xmlns="http://www.w3.org/2000/svg">
-    <line x1="${{pad}}" y1="${{pad + (1-(0-min)/range)*(H-pad*2)}}" x2="${{W-pad}}" y2="${{pad + (1-(0-min)/range)*(H-pad*2)}}" stroke="#334155" stroke-width="1" stroke-dasharray="4"/>
-    <path d="${{d}}" fill="none" stroke="${{lineColor}}" stroke-width="2"/>
-    <text x="${{W-pad}}" y="${{lastY}}" fill="${{lineColor}}" font-size="11" text-anchor="end" dy="-4">${{sign}}${{lastVal.toFixed(2)}}</text>
+    <line x1="${{padL}}" y1="${{zeroY}}" x2="${{W-padR}}" y2="${{zeroY}}" stroke="#334155" stroke-width="1" stroke-dasharray="3"/>
+    ${{bars}}${{labels}}
+    <text x="${{W-padR}}" y="${{padT-4}}" fill="${{totalColor}}" font-size="11" text-anchor="end">누적: ${{sign}}₩${{Math.round(Math.abs(totalPnl)).toLocaleString('ko-KR')}}</text>
   </svg>`;
 }}
 async function engineAction(action) {{
@@ -329,7 +421,7 @@ def _render_pnl(pnl: dict) -> str:
         cls = "win" if v >= 0 else "loss"
         return f'<span class="{cls}">{sign}{v:,.2f}</span>'
 
-    return f"""<div class="card">
+    return f"""<div class="card" id="pnl-card">
       <h2>포트폴리오</h2>
       <div class="stat-row"><span class="stat-label">현금 잔고</span><span class="stat-value">{cash:,.2f}</span></div>
       <div class="stat-row"><span class="stat-label">실현 손익</span><span class="stat-value">{fmt(realized)}</span></div>
@@ -339,7 +431,7 @@ def _render_pnl(pnl: dict) -> str:
 
 def _render_stats(stats: dict) -> str:
     if not stats:
-        return """<div class="card"><h2>성과 분석</h2><p class="empty">거래 없음</p></div>"""
+        return """<div class="card" id="stats-card"><h2>성과 분석</h2><p class="empty">거래 없음</p></div>"""
 
     total = stats.get("total_trades", 0)
     wr = stats.get("win_rate_pct", 0.0)
@@ -353,7 +445,7 @@ def _render_stats(stats: dict) -> str:
     pnl_class = "win" if total_pnl >= 0 else "loss"
     sign = "+" if total_pnl >= 0 else ""
 
-    return f"""<div class="card">
+    return f"""<div class="card" id="stats-card">
       <h2>성과 분석 ({total}건)</h2>
       <div class="stats-grid">
         <div class="stat-box"><div class="val" style="color:{wr_color}">{wr:.1f}%</div><div class="lbl">승률</div></div>
@@ -366,31 +458,68 @@ def _render_stats(stats: dict) -> str:
 
 
 def _render_equity_svg(equity: list[dict]) -> str:
-    if len(equity) < 2:
-        return '<p class="empty">거래 없음 — 첫 청산 후 곡선이 표시됩니다</p>'
+    if not equity:
+        return '<p class="empty">거래 없음 — 첫 청산 후 표시됩니다</p>'
 
-    vals = [p["pnl"] for p in equity]
-    mn, mx = min(vals), max(vals)
-    rng = mx - mn or 1
-    W, H, pad = 1000, 160, 10
+    # Aggregate by date
+    by_date: dict[str, float] = {}
+    for pt in equity:
+        date = pt["time"][:10] if "time" in pt else "unknown"
+        by_date[date] = float(pt["pnl"])
 
-    xs = [pad + i / (len(vals) - 1) * (W - pad * 2) for i in range(len(vals))]
-    ys = [pad + (1 - (v - mn) / rng) * (H - pad * 2) for v in vals]
-    d = " ".join(f"{'M' if i == 0 else 'L'}{x:.1f} {y:.1f}" for i, (x, y) in enumerate(zip(xs, ys)))
+    dates = sorted(by_date)
+    if not dates:
+        return '<p class="empty">거래 없음</p>'
 
-    color = "#10b981" if vals[-1] >= 0 else "#ef4444"
-    zero_y = pad + (1 - (0 - mn) / rng) * (H - pad * 2)
-    sign = "+" if vals[-1] >= 0 else ""
+    prev = 0.0
+    daily: list[tuple[str, float]] = []
+    for d in dates:
+        pnl = by_date[d]
+        daily.append((d, pnl - prev))
+        prev = pnl
 
-    return (
-        f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg">'
-        f'<line x1="{pad}" y1="{zero_y:.1f}" x2="{W-pad}" y2="{zero_y:.1f}" '
-        f'stroke="#334155" stroke-width="1" stroke-dasharray="4"/>'
-        f'<path d="{d}" fill="none" stroke="{color}" stroke-width="2.5"/>'
-        f'<text x="{W-pad}" y="{ys[-1]:.1f}" fill="{color}" font-size="12" '
-        f'text-anchor="end" dy="-5">{sign}{vals[-1]:.2f}</text>'
-        f"</svg>"
+    W, H = 1000, 160
+    pad_l, pad_r, pad_t, pad_b = 10, 10, 20, 25
+    chart_w = W - pad_l - pad_r
+    chart_h = H - pad_t - pad_b
+    bar_w = max(4, chart_w / len(daily) - 2)
+    max_abs = max((abs(v) for _, v in daily), default=1) or 1
+    zero_y = pad_t + chart_h / 2
+
+    parts: list[str] = [
+        f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg">',
+        f'<line x1="{pad_l}" y1="{zero_y:.1f}" x2="{W-pad_r}" y2="{zero_y:.1f}" '
+        f'stroke="#334155" stroke-width="1" stroke-dasharray="3"/>',
+    ]
+
+    step = max(1, len(daily) // 10)
+    for i, (date, v) in enumerate(daily):
+        x = pad_l + (i + 0.5) * chart_w / len(daily) - bar_w / 2
+        bh = abs(v) / max_abs * (chart_h / 2 - 4)
+        color = "#10b981" if v >= 0 else "#ef4444"
+        y = zero_y - bh if v >= 0 else zero_y
+        parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" fill="{color}" rx="1"/>')
+        sign = "+" if v >= 0 else ""
+        label_y = y - 3 if v >= 0 else y + bh + 10
+        parts.append(
+            f'<text x="{x + bar_w/2:.1f}" y="{label_y:.1f}" fill="{color}" '
+            f'font-size="9" text-anchor="middle">{sign}{round(v):,}</text>'
+        )
+        if i % step == 0:
+            parts.append(
+                f'<text x="{x + bar_w/2:.1f}" y="{H - 5}" fill="#64748b" '
+                f'font-size="9" text-anchor="middle">{date[5:]}</text>'
+            )
+
+    total = equity[-1].get("pnl", 0.0)
+    total_color = "#10b981" if total >= 0 else "#ef4444"
+    sign = "+" if total >= 0 else ""
+    parts.append(
+        f'<text x="{W - pad_r}" y="{pad_t - 4}" fill="{total_color}" '
+        f'font-size="11" text-anchor="end">누적: {sign}₩{round(abs(total)):,}</text>'
     )
+    parts.append("</svg>")
+    return "".join(parts)
 
 
 def _render_positions(positions: list[dict]) -> str:

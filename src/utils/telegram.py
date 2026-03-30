@@ -6,6 +6,7 @@ Configured via TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars.
 from __future__ import annotations
 
 import json
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,18 +21,19 @@ class TelegramClient:
     """
     Thin Telegram Bot API wrapper.
 
-    Usage:
-        client = TelegramClient(bot_token="...", chat_id="...")
-        client.send("Hello!")
-        client.send_order_filled("BTC/USDT", "buy", 0.01, 50000.0)
+    hourly_summary=True: suppresses all real-time messages; only
+    flush_summary() sends, once per hour via the engine heartbeat.
     """
 
     _BASE_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
-    def __init__(self, bot_token: str, chat_id: str) -> None:
+    def __init__(self, bot_token: str, chat_id: str, hourly_summary: bool = False) -> None:
         self._token = bot_token
         self._chat_id = chat_id
         self._enabled = bool(bot_token and chat_id)
+        self._hourly_summary = hourly_summary
+        self._buffer: list[str] = []
+        self._buffer_lock = threading.Lock()
         if not self._enabled:
             logger.debug("TelegramClient: token or chat_id missing, notifications disabled")
 
@@ -40,22 +42,15 @@ class TelegramClient:
         return self._enabled
 
     def send(self, text: str, parse_mode: str = "HTML") -> bool:
-        """
-        Send a plain text message.
-
-        Returns:
-            True if sent successfully, False otherwise (never raises).
-        """
+        """Send a plain text message. Never raises."""
         if not self._enabled:
             return False
-
         url = self._BASE_URL.format(token=self._token)
         payload = json.dumps({
             "chat_id": self._chat_id,
             "text": text,
             "parse_mode": parse_mode,
         }).encode("utf-8")
-
         try:
             req = urllib.request.Request(
                 url,
@@ -72,7 +67,67 @@ class TelegramClient:
             logger.warning("Telegram send failed", error=str(exc))
             return False
 
-    # ── Formatted event messages ──────────────────────────────────────────────
+    # ── Internal buffer ───────────────────────────────────────────────────────
+
+    def _queue(self, text: str) -> None:
+        with self._buffer_lock:
+            self._buffer.append(text)
+
+    # ── Hourly summary (the ONLY outgoing message in hourly_summary mode) ─────
+
+    def flush_summary(
+        self,
+        mode: str = "live",
+        paused: bool = False,
+        circuit_state: str = "CLOSED",
+        open_positions: int = 0,
+        cash: float = 0.0,
+        realized_pnl: float = 0.0,
+        total_trades: int = 0,
+        wins: int = 0,
+        losses: int = 0,
+        win_rate_pct: float = 0.0,
+        profit_factor: float = 0.0,
+        avg_win: float = 0.0,
+        avg_loss: float = 0.0,
+    ) -> bool:
+        """Compose and send the hourly summary, then clear the event buffer."""
+        with self._buffer_lock:
+            events = list(self._buffer)
+            self._buffer.clear()
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        circuit_emoji = "🟢" if circuit_state == "CLOSED" else "🔴"
+        state_label = "⏸ 일시정지" if paused else "▶ 실행 중"
+        pnl_sign = "+" if realized_pnl >= 0 else ""
+        pnl_emoji = "📈" if realized_pnl >= 0 else "📉"
+        pf_display = f"{profit_factor:.2f}" if profit_factor < 999 else "∞"
+
+        lines = [
+            f"⚡ <b>Trading Agent 시간별 요약</b>  <code>{now}</code>",
+            "",
+            f"<b>── 엔진 상태</b>",
+            f"  모드: <code>{mode.upper()}</code>  |  상태: {state_label}",
+            f"  서킷 브레이커: {circuit_emoji} <code>{circuit_state}</code>",
+            f"  오픈 포지션: <b>{open_positions}</b>건",
+            f"  현금 잔고: <b>₩{cash:,.0f}</b>",
+            "",
+            f"<b>── 성과 분석</b>  {pnl_emoji}",
+            f"  실현 손익: <b>{pnl_sign}₩{realized_pnl:,.0f}</b>",
+            f"  총 거래: {total_trades}건  (승 {wins} / 패 {losses})",
+            f"  승률: <b>{win_rate_pct:.1f}%</b>  |  수익 팩터: <b>{pf_display}</b>",
+            f"  평균 수익: +₩{avg_win:,.0f}  |  평균 손실: -₩{avg_loss:,.0f}",
+        ]
+
+        if events:
+            lines += ["", f"<b>── 이번 시간 이벤트</b> ({len(events)}건)"]
+            lines += [f"  {e}" for e in events]
+        else:
+            lines += ["", "  이번 시간 이벤트 없음"]
+
+        return self.send("\n".join(lines))
+
+    # ── Event methods — all silenced in hourly_summary mode ──────────────────
 
     def send_order_filled(
         self,
@@ -83,6 +138,10 @@ class TelegramClient:
         order_id: str = "",
     ) -> bool:
         emoji = "🟢" if side == "buy" else "🔴"
+        line = f"{emoji} {side.upper()} <code>{symbol}</code> {amount:.6f} @ ₩{price:,.0f}"
+        if self._hourly_summary:
+            self._queue(line)
+            return True
         text = (
             f"{emoji} <b>Order Filled</b>\n"
             f"Symbol: <code>{symbol}</code>\n"
@@ -104,6 +163,10 @@ class TelegramClient:
     ) -> bool:
         emoji = "✅" if pnl >= 0 else "❌"
         sign = "+" if pnl >= 0 else ""
+        line = f"{emoji} CLOSE <code>{symbol}</code> {sign}₩{pnl:,.0f} ({sign}{pnl_pct:.2f}%)"
+        if self._hourly_summary:
+            self._queue(line)
+            return True
         text = (
             f"{emoji} <b>Position Closed</b>\n"
             f"Symbol: <code>{symbol}</code>\n"
@@ -113,44 +176,25 @@ class TelegramClient:
         return self.send(text)
 
     def send_risk_alert(self, message: str) -> bool:
-        text = f"⚠️ <b>RISK ALERT</b>\n{message}"
-        return self.send(text)
+        if self._hourly_summary:
+            self._queue(f"⚠️ {message}")
+            return True
+        return self.send(f"⚠️ <b>RISK ALERT</b>\n{message}")
 
     def send_error(self, error: str, context: str = "") -> bool:
+        if self._hourly_summary:
+            ctx = f"[{context}] " if context else ""
+            self._queue(f"🚨 {ctx}{error[:80]}")
+            return True
         text = f"🚨 <b>ERROR</b>\n"
         if context:
             text += f"Context: {context}\n"
         text += f"<code>{error}</code>"
         return self.send(text)
 
-    def send_daily_report(
-        self,
-        date: datetime,
-        initial_capital: float,
-        final_capital: float,
-        realized_pnl: float,
-        total_trades: int,
-        win_rate: float,
-    ) -> bool:
-        pnl_pct = (realized_pnl / initial_capital * 100) if initial_capital else 0.0
-        sign = "+" if realized_pnl >= 0 else ""
-        emoji = "📈" if realized_pnl >= 0 else "📉"
-        text = (
-            f"{emoji} <b>Daily Report — {date.strftime('%Y-%m-%d')}</b>\n"
-            f"Capital: {initial_capital:,.2f} → {final_capital:,.2f}\n"
-            f"PnL: <b>{sign}{realized_pnl:,.2f} ({sign}{pnl_pct:.2f}%)</b>\n"
-            f"Trades: {total_trades}  |  Win Rate: {win_rate:.1f}%"
-        )
-        return self.send(text)
-
-
-    def send_startup(
-        self,
-        mode: str,
-        exchange: str,
-        symbols: list[str],
-        strategy: str,
-    ) -> bool:
+    def send_startup(self, mode: str, exchange: str, symbols: list[str], strategy: str) -> bool:
+        if self._hourly_summary:
+            return True  # suppress
         text = (
             f"🚀 <b>Trading Agent Started</b>\n"
             f"Mode: <b>{mode.upper()}</b>  |  Exchange: <code>{exchange}</code>\n"
@@ -166,30 +210,48 @@ class TelegramClient:
         win_rate: float,
         realized_pnl: float,
     ) -> bool:
+        if self._hourly_summary:
+            return True  # suppress
         hours, rem = divmod(int(session_seconds), 3600)
         minutes = rem // 60
         sign = "+" if realized_pnl >= 0 else ""
-        text = (
+        return self.send(
             f"🛑 <b>Trading Agent Stopped</b>\n"
             f"Session: {hours}h {minutes}m\n"
             f"Trades: {total_trades}  |  Win Rate: {win_rate:.1f}%\n"
             f"Realized PnL: <b>{sign}{realized_pnl:,.2f}</b>"
         )
-        return self.send(text)
 
-    def send_heartbeat(
+    def send_daily_report(
         self,
-        open_positions: int,
-        cash: float,
-        circuit_state: str,
+        date: datetime,
+        initial_capital: float,
+        final_capital: float,
+        realized_pnl: float,
+        total_trades: int,
+        win_rate: float,
     ) -> bool:
+        if self._hourly_summary:
+            return True  # suppress — covered by hourly summary
+        pnl_pct = (realized_pnl / initial_capital * 100) if initial_capital else 0.0
+        sign = "+" if realized_pnl >= 0 else ""
+        emoji = "📈" if realized_pnl >= 0 else "📉"
+        return self.send(
+            f"{emoji} <b>Daily Report — {date.strftime('%Y-%m-%d')}</b>\n"
+            f"Capital: {initial_capital:,.2f} → {final_capital:,.2f}\n"
+            f"PnL: <b>{sign}{realized_pnl:,.2f} ({sign}{pnl_pct:.2f}%)</b>\n"
+            f"Trades: {total_trades}  |  Win Rate: {win_rate:.1f}%"
+        )
+
+    def send_heartbeat(self, open_positions: int, cash: float, circuit_state: str) -> bool:
+        if self._hourly_summary:
+            return True  # suppress — replaced by flush_summary
         state_emoji = "🟢" if circuit_state == "CLOSED" else "🔴"
-        text = (
+        return self.send(
             f"{state_emoji} <b>Heartbeat</b>\n"
             f"Positions: {open_positions}  |  Cash: {cash:,.2f}\n"
             f"Circuit: <code>{circuit_state}</code>"
         )
-        return self.send(text)
 
 
 def get_telegram_client() -> TelegramClient:
@@ -199,4 +261,5 @@ def get_telegram_client() -> TelegramClient:
     return TelegramClient(
         bot_token=settings.telegram_bot_token,
         chat_id=settings.telegram_chat_id,
+        hourly_summary=True,
     )
