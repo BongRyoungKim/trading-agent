@@ -310,12 +310,40 @@ class TradingEngine:
 
     # ── Internal: symbol processing ───────────────────────────────────────────
 
+    _DUST_THRESHOLD_KRW = Decimal("5001")
+
     def _process_symbol(self, symbol: str) -> None:
         # ── Step 1: stop-loss / take-profit check ─────────────────────────────
         if self._portfolio.has_position(symbol):
             pos = self._portfolio.get_position(symbol)
             ticker = self._exchange.get_ticker(symbol)
             price = ticker.last
+
+            # ── Step 1b: dust position removal (value ≤ 5,001 KRW) ───────────
+            if pos.amount * price <= self._DUST_THRESHOLD_KRW:
+                pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
+                self._risk_manager.on_position_closed(pnl)
+                logger.info(
+                    "Dust position removed",
+                    symbol=symbol,
+                    value_krw=float(pos.amount * price),
+                    pnl=float(pnl),
+                )
+                self._journal.record(
+                    TradeRecord(
+                        symbol=symbol,
+                        side=pos.side,
+                        amount=pos.amount,
+                        entry_price=pos.entry_price,
+                        exit_price=price,
+                        entry_time=pos.entry_time,
+                        exit_time=datetime.now(UTC),
+                        pnl=pnl,
+                        commission=Decimal("0"),
+                        reason="dust",
+                    )
+                )
+                return
 
             # ── Step 1a: trailing stop ratchet ────────────────────────────────
             trailing_pct = pos.trailing_stop_pct if pos.trailing_stop_pct is not None \
@@ -475,7 +503,7 @@ class TradingEngine:
                     pass
                 return
             fill_price = order.price if order.price > 0 else price
-            commission = price * amount * self._PAPER_COMMISSION_RATE
+            commission = fill_price * amount * self._PAPER_COMMISSION_RATE
             if order.fee is not None:
                 commission = Decimal(str(order.fee))
         else:
@@ -543,7 +571,7 @@ class TradingEngine:
                 self._portfolio.close_position(symbol, price, commission=Decimal("0"))
                 return
             fill_price = order.price if order.price > 0 else price
-            commission = price * position.amount * self._PAPER_COMMISSION_RATE
+            commission = fill_price * position.amount * self._PAPER_COMMISSION_RATE
             if order.fee is not None:
                 commission = Decimal(str(order.fee))
         else:
@@ -671,6 +699,14 @@ class TradingEngine:
                         entry_price = ticker.last
                     except Exception:  # noqa: BLE001
                         continue
+                    # Skip dust holdings worth 5,001 KRW or less
+                    if free_amount * entry_price <= Decimal("5001"):
+                        logger.info(
+                            "Reconciliation: skipping dust holding",
+                            symbol=sym,
+                            value_krw=float(free_amount * entry_price),
+                        )
+                        continue
                     # Apply same SL/TP as normal opens so reconciled positions auto-close
                     recon_sl = entry_price * (Decimal("1") - Decimal(str(self._settings.max_position_risk)))
                     recon_sl_dist = entry_price - recon_sl
@@ -686,6 +722,7 @@ class TradingEngine:
                         take_profit=recon_tp,
                         trailing_stop_pct=self._trailing_stop_pct,
                     )
+                    self._risk_manager.on_position_opened()
                     logger.info(
                         "Reconciliation: registered external holding",
                         symbol=sym,

@@ -106,10 +106,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--heartbeat-interval",
         type=int,
-        default=3600,
+        default=1800,
         dest="heartbeat_interval",
         help=(
-            "Seconds between Telegram heartbeat messages (default: 3600). "
+            "Seconds between Telegram heartbeat messages (default: 1800). "
             "Set 0 to disable."
         ),
     )
@@ -234,10 +234,14 @@ def main() -> None:
     position_store = SQLitePositionStore()
     portfolio = PortfolioTracker.from_store(initial_cash=initial_capital, store=position_store)
 
+    restored_positions = len(portfolio.open_symbols())
     risk_state = PortfolioState(
         capital=initial_capital,
         peak_capital=initial_capital,
+        open_positions=restored_positions,
     )
+    if restored_positions:
+        logger.info("Risk state initialised with restored positions", open_positions=restored_positions)
     risk_manager = RiskManager(settings, risk_state)
 
     if args.symbol_strategies:

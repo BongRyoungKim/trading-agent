@@ -169,13 +169,16 @@ class DashboardState:
                 except Exception:  # noqa: BLE001
                     price = 0.0
                 free = float(bal.free)
+                eval_amount = round(free * price)
+                if eval_amount < 5001:
+                    continue
                 result.append({
                     "currency": currency,
                     "free": free,
                     "used": float(bal.used),
                     "total": float(bal.total),
                     "price": price,
-                    "eval_amount": round(free * price),
+                    "eval_amount": eval_amount,
                 })
             result.sort(key=lambda x: x["eval_amount"], reverse=True)
             return result

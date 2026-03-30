@@ -1,7 +1,10 @@
 """Unit tests for TelegramBotController."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import sys
+import threading
+import time
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -275,3 +278,144 @@ class TestGetUpdates:
         ctrl._handle_update(update)  # noqa: SLF001
         # offset is set by poll_loop, not handle_update — just verify handle works
         # The actual offset increment happens in _poll_loop, not _handle_update
+
+
+# ── /restart command ──────────────────────────────────────────────────────────
+
+class TestDispatchRestart:
+    def test_restart_returns_restart_message(self) -> None:
+        """/restart 응답 메시지에 'Restart' 또는 'restart' 포함 확인."""
+        ctrl = _make_controller()
+        with patch("os.execv"), patch("time.sleep"):
+            reply = ctrl._dispatch_command("/restart")  # noqa: SLF001
+        assert "restart" in reply.lower()
+
+    def test_restart_listed_in_help(self) -> None:
+        """/help 응답에 /restart 항목 포함 확인."""
+        ctrl = _make_controller()
+        reply = ctrl._dispatch_command("/help")  # noqa: SLF001
+        assert "/restart" in reply
+
+    def test_restart_returns_immediately_without_blocking(self) -> None:
+        """/restart는 즉시 반환해야 하며 3초 sleep을 기다리지 않아야 한다."""
+        ctrl = _make_controller()
+        with patch("os.execv"), patch("time.sleep"):
+            start = time.monotonic()
+            ctrl._dispatch_command("/restart")  # noqa: SLF001
+            elapsed = time.monotonic() - start
+        assert elapsed < 1.0, f"restart blocked for {elapsed:.2f}s — should return immediately"
+
+    def test_restart_spawns_background_thread(self) -> None:
+        """/restart 호출 후 'telegram-restart' 데몬 스레드가 생성되어야 한다."""
+        ctrl = _make_controller()
+        execv_called = threading.Event()
+
+        def fake_execv(executable, args):  # noqa: ANN001
+            execv_called.set()
+
+        with patch("os.execv", side_effect=fake_execv), patch("time.sleep"):
+            ctrl._dispatch_command("/restart")  # noqa: SLF001
+            # 스레드가 실행될 때까지 대기 (최대 2초)
+            execv_called.wait(timeout=2.0)
+
+        assert execv_called.is_set(), "os.execv was never called by restart thread"
+
+    def test_restart_calls_execv_with_correct_args(self) -> None:
+        """os.execv가 sys.executable과 sys.argv를 인자로 호출되어야 한다."""
+        ctrl = _make_controller()
+        captured: list = []
+
+        def fake_execv(executable, args):  # noqa: ANN001
+            captured.append((executable, args))
+
+        with patch("os.execv", side_effect=fake_execv), patch("time.sleep"):
+            ctrl._dispatch_command("/restart")  # noqa: SLF001
+            # 스레드 완료 대기
+            time.sleep(0.2)
+
+        assert len(captured) == 1
+        executable, args = captured[0]
+        assert executable == sys.executable
+        assert args[0] == sys.executable
+        assert args[1:] == sys.argv
+
+    def test_restart_sleeps_before_execv(self) -> None:
+        """os.execv 호출 전 time.sleep이 먼저 호출되어야 한다."""
+        ctrl = _make_controller()
+        call_order: list[str] = []
+
+        def fake_sleep(n):  # noqa: ANN001
+            call_order.append("sleep")
+
+        def fake_execv(executable, args):  # noqa: ANN001
+            call_order.append("execv")
+
+        done = threading.Event()
+
+        def fake_execv_with_signal(executable, args):  # noqa: ANN001
+            call_order.append("execv")
+            done.set()
+
+        with patch("os.execv", side_effect=fake_execv_with_signal), \
+             patch("time.sleep", side_effect=fake_sleep):
+            ctrl._dispatch_command("/restart")  # noqa: SLF001
+            done.wait(timeout=2.0)
+
+        assert call_order == ["sleep", "execv"], f"Unexpected call order: {call_order}"
+
+    def test_restart_thread_is_daemon(self) -> None:
+        """restart 스레드는 daemon=True여야 프로세스 종료 시 함께 종료된다."""
+        ctrl = _make_controller()
+        found_threads: list[threading.Thread] = []
+        original_thread_init = threading.Thread.__init__
+
+        def capture_thread(self, *args, **kwargs):  # noqa: ANN001
+            original_thread_init(self, *args, **kwargs)
+            if kwargs.get("name") == "telegram-restart":
+                found_threads.append(self)
+
+        with patch.object(threading.Thread, "__init__", capture_thread), \
+             patch("os.execv"), patch("time.sleep"):
+            ctrl._dispatch_command("/restart")  # noqa: SLF001
+            time.sleep(0.1)
+
+        assert found_threads, "telegram-restart thread was not created"
+        assert found_threads[0].daemon is True, "restart thread must be daemon"
+
+    def test_restart_via_handle_update(self) -> None:
+        """/restart 메시지가 update 흐름을 통해 정상 처리되는지 검증한다."""
+        telegram = _make_telegram()
+        ctrl = TelegramBotController(
+            telegram=telegram,
+            engine=_make_engine(),
+            portfolio_fn=_make_portfolio_fn(),
+        )
+        update = {
+            "update_id": 200,
+            "message": {"text": "/restart", "chat": {"id": "123"}},
+        }
+        with patch("os.execv"), patch("time.sleep"):
+            ctrl._handle_update(update)  # noqa: SLF001
+
+        telegram.send.assert_called_once()
+        msg = telegram.send.call_args[0][0]
+        assert "restart" in msg.lower()
+
+    def test_restart_with_bot_suffix(self) -> None:
+        """/restart@BotName 형식도 정상 처리되어야 한다."""
+        telegram = _make_telegram()
+        ctrl = TelegramBotController(
+            telegram=telegram,
+            engine=_make_engine(),
+            portfolio_fn=_make_portfolio_fn(),
+        )
+        update = {
+            "update_id": 201,
+            "message": {"text": "/restart@MyTradingBot", "chat": {"id": "123"}},
+        }
+        with patch("os.execv"), patch("time.sleep"):
+            ctrl._handle_update(update)  # noqa: SLF001
+
+        telegram.send.assert_called_once()
+        msg = telegram.send.call_args[0][0]
+        assert "restart" in msg.lower()

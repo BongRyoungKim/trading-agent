@@ -21,6 +21,8 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -146,6 +148,7 @@ class TelegramBotController:
             "/pnl": self._fmt_pnl,
             "/pause": self._cmd_pause,
             "/resume": self._cmd_resume,
+            "/restart": self._cmd_restart,
         }
         handler = dispatch.get(cmd)
         if handler is None:
@@ -160,6 +163,7 @@ class TelegramBotController:
             "/pnl — Portfolio PnL summary\n"
             "/pause — Pause trading\n"
             "/resume — Resume trading\n"
+            "/restart — Restart the trading agent\n"
             "/help — Show this message"
         )
 
@@ -225,3 +229,14 @@ class TelegramBotController:
             return "▶️ Engine is already running."
         self._engine.resume()
         return "▶️ <b>Trading resumed.</b>"
+
+    def _cmd_restart(self) -> str:
+        logger.info("Restart requested via Telegram")
+        # Schedule restart after reply is sent (3 s delay)
+        def _do_restart() -> None:
+            import time
+            time.sleep(3)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        threading.Thread(target=_do_restart, daemon=True, name="telegram-restart").start()
+        return "🔄 <b>Restarting trading agent...</b>\nWill reconnect in a few seconds."
