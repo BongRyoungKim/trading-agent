@@ -27,7 +27,7 @@ from src.data.validator import OHLCVValidator
 from src.exchange.slippage import SlippageConfig, apply_slippage
 from src.health import get_health_state
 from src.utils.circuit_breaker import CircuitBreaker
-from src.utils.exceptions import CircuitBreakerOpenError, RiskError
+from src.utils.exceptions import CircuitBreakerOpenError, PositionLimitExceededError, RiskError
 from src.utils.market_hours import MarketHoursConfig, market_hours_from_settings
 from src.utils.telegram import TelegramClient
 
@@ -441,6 +441,15 @@ class TradingEngine:
 
         try:
             self._risk_manager.check_can_open_position()
+        except PositionLimitExceededError:
+            # Normal operating behaviour — max 1 concurrent position is active.
+            # Log at DEBUG only; no Telegram alert (not an error condition).
+            logger.debug(
+                "Position limit active — buy skipped",
+                symbol=symbol,
+                open_positions=self._risk_manager._state.open_positions,  # noqa: SLF001
+            )
+            return
         except RiskError as exc:
             logger.warning("Risk check blocked open", symbol=symbol, reason=str(exc))
             self._telegram.send_risk_alert(str(exc))
@@ -773,6 +782,30 @@ class TradingEngine:
                 circuit=circuit_state,
             )
             if self._telegram._hourly_summary:  # noqa: SLF001
+                # Build per-position detail with live prices
+                positions_detail: list[dict] = []
+                for sym in self._portfolio.open_symbols():
+                    pos = self._portfolio.get_position(sym)
+                    if pos is None:
+                        continue
+                    try:
+                        ticker = self._exchange.get_ticker(sym)
+                        current = ticker.last
+                    except Exception:  # noqa: BLE001
+                        current = pos.entry_price
+                    pnl_val = float(pos.unrealized_pnl(current))
+                    pnl_pct = pos.unrealized_pnl_pct(current)
+                    positions_detail.append({
+                        "symbol": sym,
+                        "entry_price": float(pos.entry_price),
+                        "current_price": float(current),
+                        "amount": float(pos.amount),
+                        "pnl": pnl_val,
+                        "pnl_pct": pnl_pct,
+                        "stop_loss": float(pos.stop_loss) if pos.stop_loss else 0.0,
+                        "take_profit": float(pos.take_profit) if pos.take_profit else 0.0,
+                    })
+
                 self._telegram.flush_summary(
                     mode=self._mode,
                     paused=self.is_paused,
@@ -787,6 +820,7 @@ class TradingEngine:
                     profit_factor=float(stats["profit_factor"]) if stats["profit_factor"] != float("inf") else 999.0,
                     avg_win=stats["avg_win"],
                     avg_loss=stats["avg_loss"],
+                    positions_detail=positions_detail,
                 )
             else:
                 self._telegram.send_heartbeat(

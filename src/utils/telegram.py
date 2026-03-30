@@ -90,8 +90,13 @@ class TelegramClient:
         profit_factor: float = 0.0,
         avg_win: float = 0.0,
         avg_loss: float = 0.0,
+        positions_detail: list[dict] | None = None,
     ) -> bool:
-        """Compose and send the hourly summary, then clear the event buffer."""
+        """Compose and send the hourly summary, then clear the event buffer.
+
+        positions_detail: list of dicts with keys:
+            symbol, entry_price, current_price, amount, pnl, pnl_pct, stop_loss, take_profit
+        """
         with self._buffer_lock:
             events = list(self._buffer)
             self._buffer.clear()
@@ -106,11 +111,10 @@ class TelegramClient:
         lines = [
             f"⚡ <b>Trading Agent 시간별 요약</b>  <code>{now}</code>",
             "",
-            f"<b>── 엔진 상태</b>",
+            "<b>── 엔진 상태</b>",
             f"  모드: <code>{mode.upper()}</code>  |  상태: {state_label}",
             f"  서킷 브레이커: {circuit_emoji} <code>{circuit_state}</code>",
-            f"  오픈 포지션: <b>{open_positions}</b>건",
-            f"  현금 잔고: <b>₩{cash:,.0f}</b>",
+            f"  오픈 포지션: <b>{open_positions}</b>건  |  현금: <b>₩{cash:,.0f}</b>",
             "",
             f"<b>── 성과 분석</b>  {pnl_emoji}",
             f"  실현 손익: <b>{pnl_sign}₩{realized_pnl:,.0f}</b>",
@@ -119,6 +123,26 @@ class TelegramClient:
             f"  평균 수익: +₩{avg_win:,.0f}  |  평균 손실: -₩{avg_loss:,.0f}",
         ]
 
+        # ── Open positions detail ─────────────────────────────────────────────
+        if positions_detail:
+            lines += ["", "<b>── 보유 포지션</b>"]
+            for pos in positions_detail:
+                sym = pos.get("symbol", "?")
+                entry = pos.get("entry_price", 0.0)
+                current = pos.get("current_price", 0.0)
+                pnl_pos = pos.get("pnl", 0.0)
+                pnl_pct_pos = pos.get("pnl_pct", 0.0)
+                sl = pos.get("stop_loss", 0.0)
+                tp = pos.get("take_profit", 0.0)
+                sign = "+" if pnl_pos >= 0 else ""
+                emoji = "📈" if pnl_pos >= 0 else "📉"
+                lines.append(
+                    f"  {emoji} <code>{sym}</code>  진입 {entry:,.1f} → 현재 {current:,.1f}"
+                    f"  <b>{sign}₩{pnl_pos:,.0f} ({sign}{pnl_pct_pos:.1f}%)</b>"
+                    f"\n       SL {sl:,.1f}  /  TP {tp:,.1f}"
+                )
+
+        # ── Events ────────────────────────────────────────────────────────────
         if events:
             lines += ["", f"<b>── 이번 시간 이벤트</b> ({len(events)}건)"]
             lines += [f"  {e}" for e in events]
