@@ -420,22 +420,38 @@ class TradingEngine:
                 # Re-check cash inside lock (another thread may have just spent it)
                 if self._portfolio.cash < Decimal("10000"):
                     return
-                self._open_position(symbol)
+                self._open_position(symbol, signal_)
             finally:
                 self._buy_lock.release()
         elif signal_.action == SignalAction.SELL and has_pos:
+            # Minimum hold time: ignore signal SELL if position is younger than 10 minutes
+            pos = self._portfolio.get_position(symbol)
+            hold_seconds = (datetime.now(UTC) - pos.entry_time).total_seconds()
+            if hold_seconds < 600:
+                logger.debug(
+                    "Signal SELL suppressed — minimum hold time not reached",
+                    symbol=symbol,
+                    hold_seconds=int(hold_seconds),
+                )
+                return
             self._close_position(symbol)
 
     # ── Internal: order execution ─────────────────────────────────────────────
 
-    def _open_position(self, symbol: str) -> None:
+    def _open_position(self, symbol: str, signal_: object | None = None) -> None:
         ticker = self._exchange.get_ticker(symbol)
         price = ticker.last
 
-        stop_loss = self._risk_manager.calculate_stop_loss(price, side="buy")
-        # Take profit: 3× the stop-loss distance (minimum 15% above entry)
+        # ATR-based SL if available from signal metadata
+        atr_val = signal_.metadata.get("atr") if signal_ and signal_.metadata else None
+        stop_loss = self._risk_manager.calculate_stop_loss(
+            price, side="buy",
+            atr_value=float(atr_val) if atr_val else None,
+            atr_multiplier=1.5,
+        )
+        # Take profit: 2× the stop-loss distance (minimum 3% above entry — achievable for scalps)
         sl_distance = price - stop_loss
-        tp_distance = max(sl_distance * Decimal("3"), price * Decimal("0.15"))
+        tp_distance = max(sl_distance * Decimal("2"), price * Decimal("0.03"))
         take_profit = price + tp_distance
 
         amount = fixed_fraction(

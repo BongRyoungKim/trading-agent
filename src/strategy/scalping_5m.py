@@ -2,16 +2,17 @@
 5-Minute EMA Scalping Strategy.
 
 Short-term scalping on 5-minute candles using EMA crossover as the primary
-trend signal, MACD histogram for momentum confirmation, and RSI to filter
-overbought entries.
+trend signal, MACD histogram for momentum confirmation, RSI to filter
+overbought entries, and volume confirmation to avoid low-liquidity traps.
 
 Signal logic:
-  BUY  : EMA9 crosses above EMA21 (golden cross)
-         AND MACD histogram turns positive (momentum confirms)
-         AND RSI is between rsi_min and overbought (not extended)
+  BUY  : EMA9 > EMA21 (bullish)
+         AND MACD histogram *just turned positive* (hist_prev <= 0 → hist > 0)
+         AND RSI between rsi_min and overbought (momentum confirmed, not extended)
+         AND volume >= vol_mult × 20-bar average (liquidity filter)
   SELL : EMA9 crosses below EMA21 (death cross)
          OR RSI >= overbought (take profit before reversal)
-         OR MACD histogram turns negative while holding
+         OR MACD histogram turns negative while above EMA (momentum loss)
   HOLD : All other conditions
 """
 from __future__ import annotations
@@ -35,21 +36,23 @@ class Scalping5mStrategy(BaseStrategy):
         symbol:        Trading symbol.
         ema_fast:      Fast EMA period (default 9).
         ema_slow:      Slow EMA period (default 21).
-        rsi_period:    RSI lookback period (default 7 — faster for scalping).
-        rsi_min:       Minimum RSI for entry, avoids weak momentum (default 45).
+        rsi_period:    RSI lookback period (default 7).
+        rsi_min:       Minimum RSI for entry — avoids weak momentum (default 45).
         overbought:    RSI level for take-profit SELL and entry block (default 75).
         atr_period:    ATR period for stop-loss metadata (default 14).
+        vol_mult:      Volume must exceed this multiple of 20-bar average (default 1.2).
     """
 
     def __init__(
         self,
         symbol: str,
-        ema_fast: int = 5,
-        ema_slow: int = 13,
-        rsi_period: int = 6,
-        rsi_min: float = 25.0,
-        overbought: float = 80.0,
+        ema_fast: int = 9,
+        ema_slow: int = 21,
+        rsi_period: int = 7,
+        rsi_min: float = 45.0,
+        overbought: float = 75.0,
         atr_period: int = 14,
+        vol_mult: float = 1.2,
     ) -> None:
         if ema_fast >= ema_slow:
             raise ValueError(f"ema_fast ({ema_fast}) must be < ema_slow ({ema_slow})")
@@ -63,6 +66,8 @@ class Scalping5mStrategy(BaseStrategy):
         self._rsi_min = rsi_min
         self._overbought = overbought
         self._atr_period = atr_period
+        self._vol_mult = vol_mult
+        self._vol_lookback = 20
 
     @property
     def name(self) -> str:
@@ -73,8 +78,7 @@ class Scalping5mStrategy(BaseStrategy):
         return "3m"
 
     def min_required_bars(self) -> int:
-        # EMA slow needs ~2x period for warmup; MACD needs 26+9; pick max
-        return max(self._ema_slow * 2, 26, self._atr_period + 1)
+        return max(self._ema_slow * 2, 26, self._atr_period + 1, self._vol_lookback + 1)
 
     def get_parameters(self) -> dict:
         return {
@@ -85,6 +89,7 @@ class Scalping5mStrategy(BaseStrategy):
             "rsi_min": self._rsi_min,
             "overbought": self._overbought,
             "atr_period": self._atr_period,
+            "vol_mult": self._vol_mult,
         }
 
     def generate_signal(self, data: pd.DataFrame) -> Signal:
@@ -103,35 +108,48 @@ class Scalping5mStrategy(BaseStrategy):
         macd_df = macd(close)
         rsi_series = calc_rsi(close, self._rsi_period)
 
-        ema_f_now = float(ema_f.iloc[-1])
+        ema_f_now  = float(ema_f.iloc[-1])
         ema_f_prev = float(ema_f.iloc[-2])
-        ema_s_now = float(ema_s.iloc[-1])
+        ema_s_now  = float(ema_s.iloc[-1])
         ema_s_prev = float(ema_s.iloc[-2])
 
-        hist_now = float(macd_df["histogram"].iloc[-1])
+        hist_now  = float(macd_df["histogram"].iloc[-1])
         hist_prev = float(macd_df["histogram"].iloc[-2])
 
         rsi_now = float(rsi_series.iloc[-1])
 
         atr_val = float(atr(data["high"], data["low"], close, self._atr_period).iloc[-1])
 
-        golden_cross = ema_f_prev <= ema_s_prev and ema_f_now > ema_s_now
-        death_cross = ema_f_prev >= ema_s_prev and ema_f_now < ema_s_now
-        above_ema = ema_f_now > ema_s_now
-        macd_turned_positive = hist_now > 0  # relaxed: histogram positive (not just turn)
-        macd_turned_negative = hist_prev >= 0 > hist_now
+        # ── Volume confirmation ───────────────────────────────────────────────
+        vol_ok = True
+        if "volume" in data.columns and len(data) >= self._vol_lookback + 1:
+            vol_now = float(data["volume"].iloc[-1])
+            vol_avg = float(data["volume"].iloc[-self._vol_lookback - 1:-1].mean())
+            vol_ok = vol_avg > 0 and vol_now >= self._vol_mult * vol_avg
+        else:
+            vol_avg = 0.0
+            vol_now = 0.0
+
+        # ── Cross conditions ──────────────────────────────────────────────────
+        golden_cross       = ema_f_prev <= ema_s_prev and ema_f_now > ema_s_now
+        death_cross        = ema_f_prev >= ema_s_prev and ema_f_now < ema_s_now
+        above_ema          = ema_f_now > ema_s_now
+        # Strict MACD turn: histogram must have been ≤ 0 last bar and now > 0
+        macd_just_positive = hist_prev <= 0 < hist_now
+        macd_turned_neg    = hist_prev >= 0 > hist_now
 
         current_price = float(close.iloc[-1])
         meta = {
             "price": current_price,
-            "ema_fast": round(ema_f_now, 2),
-            "ema_slow": round(ema_s_now, 2),
+            "ema_fast": round(ema_f_now, 4),
+            "ema_slow": round(ema_s_now, 4),
             "macd_hist": round(hist_now, 4),
             "rsi": round(rsi_now, 2),
-            "atr": round(atr_val, 2),
+            "atr": round(atr_val, 4),
+            "vol_ratio": round(vol_now / vol_avg, 2) if vol_avg > 0 else None,
         }
 
-        # ── SELL ①: Death cross (primary exit) ────────────────────────────────
+        # ── SELL ①: Death cross (primary exit) ───────────────────────────────
         if death_cross:
             return Signal(
                 symbol=self._symbol,
@@ -142,7 +160,7 @@ class Scalping5mStrategy(BaseStrategy):
                 metadata=meta,
             )
 
-        # ── SELL ②: Overbought RSI (take profit) ──────────────────────────────
+        # ── SELL ②: Overbought RSI (take profit) ─────────────────────────────
         if rsi_now >= self._overbought:
             return Signal(
                 symbol=self._symbol,
@@ -153,24 +171,23 @@ class Scalping5mStrategy(BaseStrategy):
                 metadata=meta,
             )
 
-        # ── SELL ③: MACD histogram turns negative while above EMA (momentum loss) ─
-        if macd_turned_negative and above_ema:
+        # ── SELL ③: MACD histogram turns negative while above EMA ─────────────
+        if macd_turned_neg and above_ema:
             return Signal(
                 symbol=self._symbol,
                 action=SignalAction.SELL,
                 strength=0.7,
-                reason=f"MACD histogram turned negative (hist={hist_now:.4f}), momentum fading",
+                reason=f"MACD histogram turned negative ({hist_now:.4f}), momentum fading",
                 timestamp=timestamp,
                 metadata=meta,
             )
 
-        # ── BUY: EMA9 > EMA21 (bullish) + MACD histogram turns positive + RSI in range
-        # Condition A: golden cross this candle + MACD already positive
-        # Condition B: already above EMA + MACD just turned positive
+        # ── BUY: strict MACD crossover + EMA alignment + RSI range + volume ──
         buy_condition = (
             above_ema
-            and macd_turned_positive
+            and macd_just_positive          # strict: hist turned positive this bar only
             and self._rsi_min <= rsi_now < self._overbought
+            and vol_ok                      # volume above average
         )
         if buy_condition:
             trigger = "golden cross + " if golden_cross else ""
@@ -191,7 +208,10 @@ class Scalping5mStrategy(BaseStrategy):
             symbol=self._symbol,
             action=SignalAction.HOLD,
             strength=0.0,
-            reason=f"No signal: EMA_diff={ema_f_now - ema_s_now:.2f}, RSI={rsi_now:.1f}, MACD_hist={hist_now:.4f}",
+            reason=(
+                f"No signal: EMA_diff={ema_f_now - ema_s_now:.4f}, "
+                f"RSI={rsi_now:.1f}, MACD_hist={hist_now:.4f}"
+            ),
             timestamp=timestamp,
             metadata=meta,
         )
