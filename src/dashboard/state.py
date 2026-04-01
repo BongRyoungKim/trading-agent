@@ -6,6 +6,7 @@ through this singleton — keeping the web layer decoupled from the engine.
 """
 from __future__ import annotations
 
+import queue
 import threading
 from typing import TYPE_CHECKING
 
@@ -19,10 +20,38 @@ class DashboardState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._engine: TradingEngine | None = None
+        self._tick_queues: list[queue.Queue] = []
+        self._tick_queues_lock = threading.Lock()
 
     def register_engine(self, engine: TradingEngine) -> None:
         with self._lock:
             self._engine = engine
+        engine.register_tick_callback(self.notify_tick)
+
+    def notify_tick(self, tick: dict) -> None:
+        """Called by the engine after each tick evaluation; pushes to SSE subscribers."""
+        with self._tick_queues_lock:
+            queues = list(self._tick_queues)
+        for q in queues:
+            try:
+                q.put_nowait(tick)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def subscribe_ticks(self) -> queue.Queue:
+        """Register a new SSE subscriber; returns a queue that receives tick dicts."""
+        q: queue.Queue = queue.Queue(maxsize=100)
+        with self._tick_queues_lock:
+            self._tick_queues.append(q)
+        return q
+
+    def unsubscribe_ticks(self, q: queue.Queue) -> None:
+        """Remove an SSE subscriber queue."""
+        with self._tick_queues_lock:
+            try:
+                self._tick_queues.remove(q)
+            except ValueError:
+                pass
 
     @property
     def engine(self) -> TradingEngine | None:
@@ -125,6 +154,35 @@ class DashboardState:
             })
         return curve
 
+    def get_strategy_info(self) -> dict:
+        """Return strategy name, parameters, and signal criteria for the dashboard."""
+        eng = self.engine
+        if eng is None:
+            return {}
+        # Use first tracked symbol to resolve strategy params
+        symbols = list(getattr(eng, "_latest_ticks", {}).keys())
+        if not symbols:
+            # Fall back to any symbol in the scheduler
+            try:
+                jobs = eng._scheduler.get_jobs()  # noqa: SLF001
+                symbols = [j.id.replace("tick_", "") for j in jobs if j.id.startswith("tick_")]
+            except Exception:  # noqa: BLE001
+                return {}
+        if not symbols:
+            return {}
+        try:
+            strategy = eng._resolve_strategy(symbols[0])  # noqa: SLF001
+            params = strategy.get_parameters() if hasattr(strategy, "get_parameters") else {}
+            # Remove the per-symbol key to show generic params once
+            params.pop("symbol", None)
+            return {
+                "name": type(strategy).__name__,
+                "timeframe": strategy.timeframe,
+                "parameters": params,
+            }
+        except Exception:  # noqa: BLE001
+            return {}
+
     def get_ticks(self) -> list[dict]:
         """Return latest tick evaluation result per symbol, sorted by symbol."""
         eng = self.engine
@@ -172,6 +230,7 @@ class DashboardState:
                 eval_amount = round(free * price)
                 if eval_amount < 5001:
                     continue
+                avg_buy_price = float(bal.avg_buy_price)
                 result.append({
                     "currency": currency,
                     "free": free,
@@ -179,6 +238,8 @@ class DashboardState:
                     "total": float(bal.total),
                     "price": price,
                     "eval_amount": eval_amount,
+                    "avg_buy_price": avg_buy_price,
+                    "buy_amount": round(float(bal.total) * avg_buy_price),
                 })
             result.sort(key=lambda x: x["eval_amount"], reverse=True)
             return result

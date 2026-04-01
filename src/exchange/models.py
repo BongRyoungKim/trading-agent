@@ -32,14 +32,18 @@ class Balance:
     free: Decimal
     used: Decimal
     total: Decimal
+    avg_buy_price: Decimal = Decimal(0)
 
     @classmethod
     def from_ccxt(cls, currency: str, data: dict) -> "Balance":
+        info = data.get("info") or {}
+        avg_buy_price_raw = info.get("avg_buy_price") or 0
         return cls(
             currency=currency,
             free=Decimal(str(data.get("free") or 0)),
             used=Decimal(str(data.get("used") or 0)),
             total=Decimal(str(data.get("total") or 0)),
+            avg_buy_price=Decimal(str(avg_buy_price_raw)),
         )
 
 

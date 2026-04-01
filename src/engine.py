@@ -27,7 +27,7 @@ from src.data.validator import OHLCVValidator
 from src.exchange.slippage import SlippageConfig, apply_slippage
 from src.health import get_health_state
 from src.utils.circuit_breaker import CircuitBreaker
-from src.utils.exceptions import CircuitBreakerOpenError, PositionLimitExceededError, RiskError
+from src.utils.exceptions import CircuitBreakerOpenError, ConnectionError, PositionLimitExceededError, RiskError
 from src.utils.market_hours import MarketHoursConfig, market_hours_from_settings
 from src.utils.telegram import TelegramClient
 
@@ -89,6 +89,7 @@ class TradingEngine:
         self._buy_lock = threading.Lock()  # prevents simultaneous BUY races across symbols
         self._initial_capital: Decimal | None = None  # captured at start for daily report
         self._latest_ticks: dict[str, dict] = {}  # symbol → latest tick result
+        self._tick_callbacks: list = []  # called with tick dict after each evaluation
         self._sync_anchor: str = ""  # first symbol in the list — triggers KRW sync
         self._journal = (
             TradeJournal.from_store(journal_store)
@@ -124,6 +125,10 @@ class TradingEngine:
     def is_paused(self) -> bool:
         with self._paused_lock:
             return self._paused
+
+    def register_tick_callback(self, fn) -> None:
+        """Register a callable(tick_dict) to be called after each symbol evaluation."""
+        self._tick_callbacks.append(fn)
 
     def pause(self) -> None:
         """Pause trading — ticks are skipped until resume() is called."""
@@ -186,6 +191,14 @@ class TradingEngine:
             self._telegram.send_risk_alert(
                 f"Exchange circuit breaker OPEN for {self._settings.exchange}. "
                 "Trading paused until exchange recovers."
+            )
+        except ConnectionError as exc:
+            # Transient network error — retry decorator already attempted 3×.
+            # Log as warning only; no Telegram alert to avoid spam.
+            logger.warning(
+                "Tick skipped — exchange connection error (all retries exhausted)",
+                symbol=symbol,
+                error=str(exc),
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"Unhandled error in tick | {symbol} | {exc}")
@@ -392,13 +405,19 @@ class TradingEngine:
         logger.info(
             f"Tick | {symbol} → {signal_.action.name} | {signal_.reason[:80]}"
         )
-        self._latest_ticks[symbol] = {
+        tick_data = {
             "symbol": symbol,
             "action": signal_.action.name,
             "reason": signal_.reason,
             "metadata": signal_.metadata or {},
             "timestamp": signal_.timestamp.isoformat() if signal_.timestamp else None,
         }
+        self._latest_ticks[symbol] = tick_data
+        for _cb in self._tick_callbacks:
+            try:
+                _cb(tick_data)
+            except Exception:  # noqa: BLE001
+                pass
 
         if not signal_.is_actionable():
             return

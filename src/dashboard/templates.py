@@ -4,6 +4,8 @@ Pure f-string HTML with vanilla JS and inline SVG for charting.
 """
 from __future__ import annotations
 
+import json as _json
+
 
 def render_dashboard(
     status: dict,
@@ -40,6 +42,12 @@ def render_dashboard(
     pnl_html = _render_pnl(pnl)
     balance_html = _render_balance(balance)
     ticks_html = _render_ticks(ticks)
+    # Seed the client-side _ticksMap with server-rendered data so the table is
+    # immediately populated and SSE updates are merged into it.
+    _ticks_seed_js = "\n".join(
+        f"_ticksMap[{_json.dumps(t['symbol'])}] = {_json.dumps(t)};"
+        for t in ticks
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -71,6 +79,10 @@ def render_dashboard(
     th{{text-align:left;color:#64748b;font-size:.72rem;text-transform:uppercase;padding:.5rem 0;border-bottom:1px solid #334155}}
     td{{padding:.55rem 0;border-bottom:1px solid #1e293b}}
     tr:last-child td{{border-bottom:none}}
+    /* Ticks table — centered, bold headers, cell borders */
+    .ticks-table th{{text-align:center;font-weight:700;color:#94a3b8;font-size:.75rem;border:1.5px solid #334155;padding:.45rem .5rem;background:#0f172a;text-transform:none}}
+    .ticks-table td{{text-align:center;border:1px solid #1e293b;padding:.5rem .4rem;border-bottom:1px solid #1e293b}}
+    .ticks-table tr:last-child td{{border-bottom:1px solid #1e293b}}
     .empty{{color:#475569;font-size:.875rem;text-align:center;padding:1.5rem 0}}
     .win{{color:#10b981}}.loss{{color:#ef4444}}
     /* Controls */
@@ -78,6 +90,26 @@ def render_dashboard(
     button{{padding:.55rem 1.3rem;border:none;border-radius:.4rem;font-weight:600;cursor:pointer;font-size:.875rem;transition:opacity .15s}}
     button:hover{{opacity:.85}}
     .btn-pause{{background:#f59e0b;color:#000}}.btn-resume{{background:#10b981;color:#000}}
+    /* Strategy criteria */
+    .criteria-grid{{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:.5rem}}
+    .criteria-col h3{{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem}}
+    .criteria-col h3.buy{{color:#10b981}}.criteria-col h3.sell{{color:#ef4444}}
+    .criteria-row{{display:flex;align-items:flex-start;gap:.4rem;margin:.3rem 0;font-size:.8rem;color:#cbd5e1}}
+    .criteria-row .ci{{font-size:.9rem;flex-shrink:0}}
+    .param-row{{display:inline-flex;align-items:center;gap:.3rem;margin:.2rem .3rem;background:#0f172a;border-radius:.3rem;padding:.2rem .5rem;font-size:.78rem}}
+    .param-key{{color:#64748b}}.param-val{{color:#f1f5f9;font-weight:600}}
+    /* Condition pill badges */
+    .cp{{display:inline-block;padding:.15rem .35rem;border-radius:.25rem;font-size:.72rem;font-weight:700;margin:0 2px;vertical-align:middle;letter-spacing:.02em;transition:opacity .2s}}
+    .cp-dim{{background:#1e293b;color:#3d5060}}
+    /* Buy condition (active) — unified green */
+    .cp-buy{{background:#10b98120;color:#34d399;border:1px solid #10b981}}
+    /* Sell trigger (active) — unified red */
+    .cp-sell{{background:#ef444425;color:#f87171;border:1px solid #ef4444}}
+    /* Tick flash animation */
+    @keyframes tickFlash{{0%{{background:#1e4a3a}}100%{{background:transparent}}}}
+    .tick-flash{{animation:tickFlash .8s ease-out}}
+    .tick-live-dot{{display:inline-block;width:7px;height:7px;border-radius:50%;background:#10b981;margin-right:.4rem;animation:pulse 2s infinite}}
+    @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
     .toast{{position:fixed;bottom:2rem;right:2rem;background:#334155;padding:.7rem 1.2rem;border-radius:.5rem;font-size:.875rem;display:none;z-index:99}}
     /* SVG chart */
     .chart-wrap{{width:100%;overflow:hidden;background:#0f172a;border-radius:.5rem;margin-top:.5rem}}
@@ -87,6 +119,9 @@ def render_dashboard(
     .stat-box{{background:#0f172a;border-radius:.5rem;padding:.75rem;text-align:center}}
     .stat-box .val{{font-size:1.25rem;font-weight:700;margin-bottom:.25rem}}
     .stat-box .lbl{{font-size:.7rem;color:#64748b;text-transform:uppercase}}
+    .status-box{{background:#0f172a;border:1px solid #334155;border-radius:.5rem;padding:.65rem .5rem;text-align:center}}
+    .wr-bar{{height:6px;background:#1e293b;border-radius:9999px;overflow:hidden;margin-top:.4rem}}
+    .wr-fill{{height:100%;border-radius:9999px;transition:width .6s ease}}
     code{{background:#0f172a;padding:.1rem .3rem;border-radius:.25rem;font-size:.8rem}}
   </style>
 </head>
@@ -96,8 +131,8 @@ def render_dashboard(
   <span class="meta" id="meta">30초 자동 새로고침</span>
 </header>
 <main>
-  <!-- Top stat cards -->
-  <div class="top-grid">
+  <!-- Row 1: 엔진상태 + 포트폴리오 -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;margin-bottom:1.2rem">
     <div class="card" id="status-card">
       <h2>엔진 상태</h2>
       <div class="stat-row"><span class="stat-label">모드</span>{mode_badge}</div>
@@ -106,8 +141,9 @@ def render_dashboard(
       <div class="stat-row"><span class="stat-label">거래 시간</span><span class="stat-value" style="font-size:.78rem;color:#94a3b8">{hours_info}</span></div>
     </div>
     {pnl_html}
-    {stats_html}
   </div>
+  <!-- Row 2: 성과분석 -->
+  {stats_html}
 
   <!-- Balance card -->
   <div id="balance-card" class="card" style="margin-bottom:1.2rem">
@@ -115,9 +151,24 @@ def render_dashboard(
     <div id="balance-body">{balance_html}</div>
   </div>
 
+  <!-- Strategy criteria -->
+  <div class="card" style="margin-bottom:1.2rem" id="strategy-card">
+    <h2>전략 파라미터 &amp; 신호 기준</h2>
+    <div id="strategy-body">로딩 중...</div>
+  </div>
+
   <!-- Live signal evaluation -->
   <div class="card" style="margin-bottom:1.2rem">
-    <h2>실시간 신호 평가 현황</h2>
+    <h2 style="display:flex;align-items:center;gap:.5rem">
+      <svg viewBox="0 0 230 22" style="width:auto!important;height:22px!important;display:inline-block;vertical-align:middle;overflow:visible" xmlns="http://www.w3.org/2000/svg">
+        <polyline points="0,11 12,11 18,2 24,20 30,11 44,11" fill="none" stroke="#10b981" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="47" cy="11" r="3" fill="#10b981" style="animation:pulse 2s infinite"/>
+        <rect x="55" y="3" width="30" height="15" rx="3" fill="#10b98118" stroke="#10b981" stroke-width=".8"/>
+        <text x="70" y="14.5" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="800" letter-spacing=".08em" fill="#10b981">LIVE</text>
+        <text x="92" y="16" font-family="system-ui,-apple-system,sans-serif" font-size="12.5" font-weight="700" fill="#f1f5f9">신호 평가 현황</text>
+      </svg>
+      <span id="tick-last-time" style="font-size:.7rem;color:#475569;font-weight:400"></span>
+    </h2>
     <div id="ticks-body">{ticks_html}</div>
   </div>
 
@@ -141,10 +192,6 @@ def render_dashboard(
     <div id="tab-sells" class="tab-panel">{sell_html}</div>
   </div>
 
-  <div class="controls">
-    <button class="btn-pause" onclick="engineAction('pause')">⏸ 일시정지</button>
-    <button class="btn-resume" onclick="engineAction('resume')">▶ 재개</button>
-  </div>
 </main>
 <div class="toast" id="toast"></div>
 <script>
@@ -154,9 +201,11 @@ function switchTab(name, btn) {{
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
 }}
+let _strategyParams = {{}};
+let _positionsMap = {{}};  // symbol → position (entry_price, amount)
 async function refresh() {{
   try {{
-    const [s, pos, pnl, trades, stats, eq, bal, ticks] = await Promise.all([
+    const [s, pos, pnl, trades, stats, eq, bal, ticks, strat] = await Promise.all([
       fetch('/api/status').then(r=>r.json()),
       fetch('/api/positions').then(r=>r.json()),
       fetch('/api/pnl').then(r=>r.json()),
@@ -165,13 +214,18 @@ async function refresh() {{
       fetch('/api/equity').then(r=>r.json()),
       fetch('/api/balance').then(r=>r.json()),
       fetch('/api/ticks').then(r=>r.json()),
+      fetch('/api/strategy').then(r=>r.json()),
     ]);
     document.getElementById('meta').textContent = '새로고침: ' + new Date().toLocaleTimeString();
+    // Update positions map for tick table lookup
+    _positionsMap = {{}};
+    (pos || []).forEach(p => {{ _positionsMap[p.symbol] = p; }});
     renderStatus(s);
     renderPnl(pnl);
     renderStats(stats);
     renderEquity(eq);
     renderBalance(bal);
+    renderStrategy(strat);
     renderTicks(ticks);
     renderBuyHistory(trades);
     renderSellHistory(trades);
@@ -180,6 +234,74 @@ async function refresh() {{
     if (tabs[1]) tabs[1].textContent = `매수 이력 (${{trades.length}})`;
     if (tabs[2]) tabs[2].textContent = `매도 이력 (${{trades.length}})`;
   }} catch(e) {{ console.warn('Refresh failed', e); }}
+}}
+function renderStrategy(s) {{
+  const el = document.getElementById('strategy-body');
+  if (!el || !s || !s.name) {{ if(el) el.innerHTML = '<p class="empty">전략 정보 없음</p>'; return; }}
+  _strategyParams = s.parameters || {{}};
+  const p = _strategyParams;
+  const tf = s.timeframe || '-';
+
+  // Parameter pills
+  const paramMap = {{
+    'EMA Fast': p.ema_fast, 'EMA Slow': p.ema_slow,
+    'RSI Period': p.rsi_period, 'RSI Min': p.rsi_min,
+    'Overbought': p.overbought, 'Vol Mult': p.vol_mult,
+    'ATR Period': p.atr_period, 'Timeframe': tf,
+  }};
+  const pills = Object.entries(paramMap)
+    .filter(([,v]) => v != null)
+    .map(([k,v]) => `<span class="param-row"><span class="param-key">${{k}}</span><span class="param-val">${{v}}</span></span>`)
+    .join('');
+
+  // Signal criteria with icons
+  const emaF = p.ema_fast || 9, emaS = p.ema_slow || 21;
+  const rsiMin = p.rsi_min || 40, ob = p.overbought || 70;
+  const vm = p.vol_mult || 1.5;
+  const adxThr = p.adx_threshold || 25;
+  const mw = p.macd_window || 3;
+
+  const buyCriteria = [
+    [`EMA${{emaF}} &gt; EMA${{emaS}}`, '상승 정렬 (골든크로스 포함)'],
+    [`MACD histogram`, `음→양 전환 (${{mw}}봉 이내)`],
+    [`RSI ${{rsiMin}} ~ ${{ob}}`, '모멘텀 확인, 과매수 미도달'],
+    [`거래량 ≥ 평균 × ${{vm}}배`, '유동성 필터'],
+    [`ADX ≥ ${{adxThr}}`, '추세 강도 확인 (횡보 차단)'],
+  ];
+  const sellCriteria = [
+    [`EMA${{emaF}} &lt; EMA${{emaS}}`, '데스크로스'],
+    [`RSI ≥ ${{ob}}`, '과매수 익절'],
+    ['MACD histogram', '양 → 음 전환, EMA 위에서'],
+  ];
+  const buyPillLabels  = ['EMA','MACD','RSI','VOL','ADX'];
+  const sellPillLabels = ['데스크로스','과매수','MACD↓'];
+
+  const mkBuyCriteriaRows = arr => arr.map(([cond, desc], i) =>
+    `<div class="criteria-row">
+      <span class="cp cp-buy" style="flex-shrink:0">${{buyPillLabels[i]}}</span>
+      <span><code>${{cond}}</code> <span style="color:#64748b">${{desc}}</span></span>
+    </div>`
+  ).join('');
+
+  const mkSellCriteriaRows = arr => arr.map(([cond, desc], i) =>
+    `<div class="criteria-row">
+      <span class="cp cp-sell" style="flex-shrink:0">${{sellPillLabels[i]}}</span>
+      <span><code>${{cond}}</code> <span style="color:#64748b">${{desc}}</span></span>
+    </div>`
+  ).join('');
+
+  el.innerHTML = `
+    <div style="margin-bottom:.75rem;display:flex;flex-wrap:wrap">${{pills}}</div>
+    <div class="criteria-grid">
+      <div class="criteria-col">
+        <h3 class="buy">▲ 매수 조건 (AND 5개)</h3>
+        ${{mkBuyCriteriaRows(buyCriteria)}}
+      </div>
+      <div class="criteria-col">
+        <h3 class="sell">▼ 매도 조건 (OR 3개)</h3>
+        ${{mkSellCriteriaRows(sellCriteria)}}
+      </div>
+    </div>`;
 }}
 function mkBadge(text, color) {{
   return `<span class="badge" style="background:${{color}}20;color:${{color}}">${{text}}</span>`;
@@ -192,14 +314,31 @@ function renderStatus(s) {{
   const circuit = s.circuit || 'UNKNOWN';
   const hours = s.trading_hours || '24/7';
   const days = s.trading_days || 'all';
-  const stateBadge = paused ? mkBadge('PAUSED','#f59e0b') : mkBadge('RUNNING','#10b981');
-  const circuitBadge = mkBadge(circuit, circuit !== 'CLOSED' ? '#ef4444' : '#10b981');
-  const modeBadge = mkBadge(mode, '#6366f1');
-  el.innerHTML = `<h2>엔진 상태</h2>
-    <div class="stat-row"><span class="stat-label">모드</span>${{modeBadge}}</div>
-    <div class="stat-row"><span class="stat-label">상태</span>${{stateBadge}}</div>
-    <div class="stat-row"><span class="stat-label">서킷 브레이커</span>${{circuitBadge}}</div>
-    <div class="stat-row"><span class="stat-label">거래 시간</span><span class="stat-value" style="font-size:.78rem;color:#94a3b8">${{hours}} UTC | Days: ${{days}}</span></div>`;
+  const modeColor = mode==='LIVE'?'#10b981':mode==='PAPER'?'#6366f1':'#64748b';
+  const modeIcon  = mode==='LIVE'?'⚡':mode==='PAPER'?'📋':'○';
+  const stateColor = paused?'#f59e0b':'#10b981';
+  const stateIcon  = paused?'⏸':'▶';
+  const circuitColor = circuit!=='CLOSED'?'#ef4444':'#10b981';
+  const circuitIcon  = circuit!=='CLOSED'?'⚠':'✓';
+  el.innerHTML = `
+    <h2>엔진 상태</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin:.6rem 0">
+      <div class="status-box" style="border-color:${{modeColor}}50">
+        <div style="font-size:1.5rem;margin-bottom:.2rem">${{modeIcon}}</div>
+        <div style="color:${{modeColor}};font-weight:700;font-size:.95rem">${{mode}}</div>
+        <div style="color:#475569;font-size:.68rem;margin-top:.15rem">모드</div>
+      </div>
+      <div class="status-box" style="border-color:${{stateColor}}50">
+        <div style="font-size:1.5rem;margin-bottom:.2rem">${{stateIcon}}</div>
+        <div style="color:${{stateColor}};font-weight:700;font-size:.95rem">${{paused?'PAUSED':'RUNNING'}}</div>
+        <div style="color:#475569;font-size:.68rem;margin-top:.15rem">상태</div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;background:#0f172a;border-radius:.4rem;padding:.45rem .7rem;margin-bottom:.4rem">
+      <span style="color:#64748b;font-size:.75rem">서킷 브레이커</span>
+      <span style="color:${{circuitColor}};font-weight:600;font-size:.8rem">${{circuitIcon}} ${{circuit}}</span>
+    </div>
+    <div style="color:#475569;font-size:.7rem;text-align:right">${{hours}} UTC · ${{days}}</div>`;
 }}
 function renderPnl(pnl) {{
   const el = document.getElementById('pnl-card');
@@ -207,15 +346,31 @@ function renderPnl(pnl) {{
   const cash = pnl.cash || 0;
   const realized = pnl.realized_pnl || 0;
   const unrealized = pnl.unrealized_pnl || 0;
-  const fmtVal = v => {{
-    const sign = v >= 0 ? '+' : '-';
-    const cls = v >= 0 ? 'win' : 'loss';
-    return `<span class="${{cls}}">${{sign}}₩${{Math.round(Math.abs(v)).toLocaleString('ko-KR')}}</span>`;
+  const fmtKRW = v => '₩' + Math.round(Math.abs(v)).toLocaleString('ko-KR');
+  const fmtSigned = v => {{
+    const c = v>=0?'win':'loss'; const s=v>=0?'+':'-';
+    return `<span class="${{c}}" style="font-size:1.05rem;font-weight:700">${{s}}${{fmtKRW(v)}}</span>`;
   }};
-  el.innerHTML = `<h2>포트폴리오</h2>
-    <div class="stat-row"><span class="stat-label">현금 잔고</span><span class="stat-value">₩${{Math.round(cash).toLocaleString('ko-KR')}}</span></div>
-    <div class="stat-row"><span class="stat-label">실현 손익</span><span class="stat-value">${{fmtVal(realized)}}</span></div>
-    <div class="stat-row"><span class="stat-label">미실현 손익</span><span class="stat-value">${{fmtVal(unrealized)}}</span></div>`;
+  el.innerHTML = `
+    <h2>포트폴리오</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-top:.6rem">
+      <div class="stat-box">
+        <div class="val" style="font-size:1rem;color:#f1f5f9">${{fmtKRW(cash)}}</div>
+        <div class="lbl">현금 잔고</div>
+      </div>
+      <div class="stat-box">
+        <div class="val">${{fmtSigned(realized)}}</div>
+        <div class="lbl">실현 손익</div>
+      </div>
+      <div class="stat-box">
+        <div class="val">${{fmtSigned(unrealized)}}</div>
+        <div class="lbl">미실현 손익</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.75rem">
+      <button class="btn-pause" onclick="engineAction('pause')" style="padding:.45rem;font-size:.8rem;border-radius:.4rem;width:100%">⏸ 일시정지</button>
+      <button class="btn-resume" onclick="engineAction('resume')" style="padding:.45rem;font-size:.8rem;border-radius:.4rem;width:100%">▶ 재개</button>
+    </div>`;
 }}
 function renderStats(stats) {{
   const el = document.getElementById('stats-card');
@@ -227,21 +382,65 @@ function renderStats(stats) {{
   const avgWin = stats.avg_win || 0;
   const avgLoss = stats.avg_loss || 0;
   const totalPnl = stats.total_pnl || 0;
-  const wrColor = wr >= 50 ? '#10b981' : '#ef4444';
-  const pfDisplay = pf >= 999 ? '∞' : pf.toFixed(2);
-  const pnlCls = totalPnl >= 0 ? 'win' : 'loss';
-  const sign = totalPnl >= 0 ? '+' : '';
+  const wrColor = wr>=50?'#10b981':'#ef4444';
+  const pfColor = pf>=1?'#10b981':'#ef4444';
+  const pfDisplay = pf>=999?'∞':pf.toFixed(2);
+  const pnlCls = totalPnl>=0?'win':'loss';
+  const sign = totalPnl>=0?'+':'';
   const fmtKRW = v => Math.round(Math.abs(v)).toLocaleString('ko-KR');
-  el.innerHTML = `<h2>성과 분석 (${{total}}건)</h2>
-    <div class="stats-grid">
-      <div class="stat-box"><div class="val" style="color:${{wrColor}}">${{wr.toFixed(1)}}%</div><div class="lbl">승률</div></div>
-      <div class="stat-box"><div class="val">${{pfDisplay}}</div><div class="lbl">수익 팩터</div></div>
-      <div class="stat-box"><div class="val win">+₩${{fmtKRW(avgWin)}}</div><div class="lbl">평균 수익</div></div>
-      <div class="stat-box"><div class="val loss">-₩${{fmtKRW(avgLoss)}}</div><div class="lbl">평균 손실</div></div>
-      <div class="stat-box"><div class="val ${{pnlCls}}">${{sign}}₩${{fmtKRW(totalPnl)}}</div><div class="lbl">총 손익</div></div>
+  const wins = Math.round(total*wr/100);
+  el.innerHTML = `
+    <h2>성과 분석</h2>
+    <div style="display:grid;grid-template-columns:150px 1fr;gap:1.5rem;align-items:center;margin-top:.6rem">
+      <div style="text-align:center">
+        <div style="font-size:2.4rem;font-weight:800;color:${{wrColor}};line-height:1.1">${{wr.toFixed(1)}}%</div>
+        <div style="font-size:.7rem;color:#64748b;margin:.25rem 0 .3rem">승률</div>
+        <div class="wr-bar"><div class="wr-fill" style="width:${{wr}}%;background:${{wrColor}}"></div></div>
+        <div style="font-size:.68rem;color:#475569;margin-top:.45rem">${{wins}}승 · ${{total-wins}}패 · 총 ${{total}}건</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem">
+        <div class="stat-box">
+          <div class="val" style="color:${{pfColor}}">${{pfDisplay}}</div>
+          <div class="lbl">수익 팩터</div>
+        </div>
+        <div class="stat-box">
+          <div class="val win">+₩${{fmtKRW(avgWin)}}</div>
+          <div class="lbl">평균 수익</div>
+        </div>
+        <div class="stat-box">
+          <div class="val loss">-₩${{fmtKRW(avgLoss)}}</div>
+          <div class="lbl">평균 손실</div>
+        </div>
+        <div class="stat-box">
+          <div class="val ${{pnlCls}}">${{sign}}₩${{fmtKRW(totalPnl)}}</div>
+          <div class="lbl">총 손익</div>
+        </div>
+      </div>
     </div>`;
 }}
-function renderTicks(items) {{
+// Tick SSE state
+const _ticksMap = {{}};
+function _initTickStream() {{
+  const es = new EventSource('/api/ticks/stream');
+  es.onmessage = function(e) {{
+    try {{
+      const tick = JSON.parse(e.data);
+      const prev = _ticksMap[tick.symbol];
+      _ticksMap[tick.symbol] = tick;
+      _renderTicksFromMap(tick.symbol, prev);
+      const el = document.getElementById('tick-last-time');
+      if (el) el.textContent = '최근: ' + new Date().toLocaleTimeString('ko-KR');
+    }} catch(_) {{}}
+  }};
+  es.onerror = function() {{
+    // reconnect automatically (browser handles it), suppress console noise
+  }};
+}}
+function _renderTicksFromMap(updatedSymbol, prevTick) {{
+  const items = Object.values(_ticksMap).sort((a,b)=>a.symbol<b.symbol?-1:1);
+  renderTicks(items, updatedSymbol, prevTick);
+}}
+function renderTicks(items, flashSymbol, prevTick) {{
   const el = document.getElementById('ticks-body');
   if (!el) return;
   if (!items || items.length === 0) {{ el.innerHTML = '<p class="empty">아직 평가 없음 (첫 tick 대기 중)</p>'; return; }}
@@ -252,23 +451,58 @@ function renderTicks(items) {{
       return '₩' + Math.round(v).toLocaleString('ko-KR');
     return '₩' + v.toLocaleString('ko-KR', {{maximumFractionDigits:2}});
   }};
+  const p = _strategyParams;
+  // Colored pill condition badge helpers — buy unified green, sell unified red
+  const buyPill  = (label, ok, title)  => `<span class="cp ${{ok ? 'cp-buy' : 'cp-dim'}}" title="${{title}}">${{label}}</span>`;
+  const sellPill = (label, on_, title) => `<span class="cp ${{on_ ? 'cp-sell' : 'cp-dim'}}" title="${{title}}">${{label}}</span>`;
+
   const rows = items.map(t => {{
     const m = t.metadata || {{}};
+    const c = m.cond || {{}};
     const rsi = m.rsi != null ? m.rsi.toFixed(1) : '-';
-    const macd = m.macd_hist != null ? (m.macd_hist>=0?'+':'')+m.macd_hist.toFixed(4) : '-';
+    const rsiColor = c.overbought ? '#ef4444' : c.rsi_ok ? '#10b981' : '#94a3b8';
+    const macdVal = m.macd_hist != null ? (m.macd_hist>=0?'+':'')+m.macd_hist.toFixed(4) : '-';
+    const macdColor = m.macd_hist > 0 ? '#10b981' : m.macd_hist < 0 ? '#ef4444' : '#94a3b8';
     const price = fmtPrice(t.symbol, m.price);
-    const ts = t.timestamp ? t.timestamp.substring(11,16) : '';
+    const ts = t.timestamp ? t.timestamp.substring(11,19) : '';
     const ac = actionColor(t.action);
-    return `<tr>
+    const actionChanged = flashSymbol === t.symbol && prevTick && prevTick.action !== t.action;
+    const flash = flashSymbol === t.symbol ? ' tick-flash' : '';
+    const actionDot = actionChanged ? `<span style="font-size:.65rem;color:#f59e0b;margin-left:.3rem">▲</span>` : '';
+    const volRatio = m.vol_ratio != null ? m.vol_ratio.toFixed(2)+'x' : '-';
+    const emaDiff = (m.ema_fast != null && m.ema_slow != null)
+      ? (m.ema_fast - m.ema_slow >= 0 ? '+' : '') + (m.ema_fast - m.ema_slow).toFixed(2)
+      : '-';
+    const emaDiffColor = c.above_ema ? '#10b981' : '#ef4444';
+
+    const hasCond = Object.keys(c).length > 0;
+    const condCell = !hasCond ? '<td>-</td>' : `<td style="white-space:nowrap">
+      ${{buyPill('E',c.above_ema,'EMA 상승 정렬')}}${{buyPill('M',c.macd_just_pos,'MACD 양전환')}}${{buyPill('R',c.rsi_ok,'RSI 범위 내')}}${{buyPill('V',c.vol_ok,'거래량 충분')}}${{buyPill('A',c.adx_ok,'ADX 추세 강도 ≥25')}}
+      <span style="margin:0 3px;color:#334155;font-size:.7rem">│</span>
+      ${{sellPill('D',c.death_cross,'데스크로스')}}${{sellPill('O',c.overbought,'과매수')}}${{sellPill('M',c.macd_turned_neg,'MACD 음전환')}}
+    </td>`;
+
+    return `<tr class="${{flash}}" id="tick-row-${{t.symbol.replace('/','_')}}">
       <td><code>${{t.symbol}}</code></td>
-      <td><span class="badge" style="background:${{ac}}22;color:${{ac}}">${{t.action}}</span></td>
+      <td><span class="badge" style="background:${{ac}}22;color:${{ac}}">${{t.action}}</span>${{actionDot}}</td>
       <td style="font-weight:600">${{price}}</td>
-      <td style="color:#94a3b8;font-size:.78rem">RSI ${{rsi}}</td>
-      <td style="color:#94a3b8;font-size:.78rem">MACD ${{macd}}</td>
-      <td style="color:#475569;font-size:.72rem">${{ts}}</td>
+      <td style="color:${{emaDiffColor}};font-size:.8rem">${{emaDiff}}</td>
+      <td style="color:${{macdColor}};font-size:.8rem">${{macdVal}}</td>
+      <td style="color:${{rsiColor}};font-size:.8rem">${{rsi}}</td>
+      <td style="color:#94a3b8;font-size:.8rem">${{volRatio}}</td>
+      ${{condCell}}
+      <td style="color:#475569;font-size:.75rem">${{ts}}</td>
     </tr>`;
   }});
-  el.innerHTML = `<table><thead><tr><th>종목</th><th>신호</th><th>현재가</th><th>RSI</th><th>MACD Hist</th><th>시각</th></tr></thead><tbody>${{rows.join('')}}</tbody></table>`;
+  el.innerHTML = `<table class="ticks-table"><thead><tr>
+    <th>종목</th><th>신호</th><th>현재가</th>
+    <th title="EMA Fast - EMA Slow">EMA차이</th>
+    <th title="MACD histogram">MACD Hist</th>
+    <th title="RSI">RSI</th>
+    <th title="거래량배율 (20봉 평균 대비)">거래량</th>
+    <th title="매수: E(EMA) M(MACD) R(RSI) V(VOL) │ 매도: D(데스크로스) O(과매수) M(MACD↓)">조건</th>
+    <th>시각</th>
+  </tr></thead><tbody>${{rows.join('')}}</tbody></table>`;
 }}
 function renderBalance(items) {{
   const el = document.getElementById('balance-body');
@@ -281,15 +515,20 @@ function renderBalance(items) {{
     const evalAmt = b.eval_amount || 0;
     const fmtPrice = price >= 1 ? fmtKRW(price) : '₩' + price.toFixed(4);
     const used = b.used > 0 ? ` <span style="color:#64748b;font-size:.75rem">(주문중: ${{fmtQty(b.used)}})</span>` : '';
+    const avgBuyPrice = b.avg_buy_price || 0;
+    const avgPrice = avgBuyPrice > 0 ? (avgBuyPrice >= 1 ? fmtKRW(avgBuyPrice) : '₩' + avgBuyPrice.toFixed(4)) : '-';
+    const buyAmt   = b.buy_amount > 0 ? fmtKRW(b.buy_amount) : '-';
     return `<tr>
       <td><strong>${{b.currency}}</strong></td>
       <td>${{fmtQty(b.free)}}${{used}}</td>
       <td style="color:#94a3b8">${{fmtPrice}}</td>
       <td style="color:#10b981;font-weight:600">${{fmtKRW(evalAmt)}}</td>
+      <td style="color:#60a5fa">${{avgPrice}}</td>
+      <td style="color:#a78bfa">${{buyAmt}}</td>
     </tr>`;
   }});
   const total = items.reduce((s, b) => s + (b.eval_amount || 0), 0);
-  el.innerHTML = `<table><thead><tr><th>코인</th><th>수량</th><th>현재가</th><th>평가금액</th></tr></thead><tbody>${{rows.join('')}}</tbody></table>
+  el.innerHTML = `<table><thead><tr><th>코인</th><th>수량</th><th>현재가</th><th>평가금액</th><th>매수평균가</th><th>매수금액</th></tr></thead><tbody>${{rows.join('')}}</tbody></table>
     <div class="stat-row" style="margin-top:.6rem;border-top:1px solid #334155;padding-top:.6rem">
       <span class="stat-label">총 평가금액</span>
       <span class="stat-value" style="color:#10b981;font-weight:700">${{fmtKRW(total)}}</span>
@@ -447,6 +686,14 @@ function showToast(msg) {{
   setTimeout(()=>{{t.style.display='none'}}, 3000);
 }}
 setInterval(refresh, 30000);
+// Initialize on load
+(function() {{
+  // Seed _ticksMap from server-rendered ticks data
+  {_ticks_seed_js}
+  _initTickStream();
+  // Load strategy info immediately
+  fetch('/api/strategy').then(r=>r.json()).then(renderStrategy).catch(()=>{{}});
+}})();
 </script>
 </body>
 </html>"""
@@ -476,7 +723,7 @@ def _render_pnl(pnl: dict) -> str:
 
 def _render_stats(stats: dict) -> str:
     if not stats:
-        return """<div class="card" id="stats-card"><h2>성과 분석</h2><p class="empty">거래 없음</p></div>"""
+        return """<div class="card" id="stats-card" style="margin-bottom:1.2rem"><h2>성과 분석</h2><p class="empty">거래 없음</p></div>"""
 
     total = stats.get("total_trades", 0)
     wr = stats.get("win_rate_pct", 0.0)
@@ -490,7 +737,7 @@ def _render_stats(stats: dict) -> str:
     pnl_class = "win" if total_pnl >= 0 else "loss"
     sign = "+" if total_pnl >= 0 else ""
 
-    return f"""<div class="card" id="stats-card">
+    return f"""<div class="card" id="stats-card" style="margin-bottom:1.2rem">
       <h2>성과 분석 ({total}건)</h2>
       <div class="stats-grid">
         <div class="stat-box"><div class="val" style="color:{wr_color}">{wr:.1f}%</div><div class="lbl">승률</div></div>
@@ -674,7 +921,7 @@ def _render_ticks(ticks: list[dict]) -> str:
             f"</tr>"
         )
     return (
-        "<table><thead><tr>"
+        '<table class="ticks-table"><thead><tr>'
         "<th>종목</th><th>신호</th><th>현재가</th><th>RSI</th><th>MACD Hist</th><th>시각</th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
     )

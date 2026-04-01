@@ -13,12 +13,12 @@ from typing import Any, TypeVar
 
 from loguru import logger
 
-from src.utils.exceptions import RateLimitError, TradingAgentError
+from src.utils.exceptions import ConnectionError, RateLimitError, TradingAgentError
 
 F = TypeVar("F", bound=Callable[..., Any])
 
-# Exceptions that should trigger a retry
-_RETRYABLE = (RateLimitError,)
+# Exceptions that should trigger a retry (transient, recoverable errors)
+_RETRYABLE = (RateLimitError, ConnectionError)
 
 
 def retry(

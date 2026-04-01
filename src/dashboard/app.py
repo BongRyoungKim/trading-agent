@@ -14,8 +14,12 @@ Exposes:
 """
 from __future__ import annotations
 
+import asyncio
+import json
+import queue as stdlib_queue
+
 from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from src.dashboard.state import get_dashboard_state
 from src.dashboard.templates import render_dashboard
@@ -45,9 +49,44 @@ async def get_balance() -> JSONResponse:
     return JSONResponse(get_dashboard_state().get_balance())
 
 
+@app.get("/api/strategy")
+async def get_strategy() -> JSONResponse:
+    return JSONResponse(get_dashboard_state().get_strategy_info())
+
+
 @app.get("/api/ticks")
 async def get_ticks() -> JSONResponse:
     return JSONResponse(get_dashboard_state().get_ticks())
+
+
+@app.get("/api/ticks/stream")
+async def ticks_stream() -> StreamingResponse:
+    """SSE endpoint — pushes a tick event to the client on each symbol evaluation."""
+    state = get_dashboard_state()
+    q = state.subscribe_ticks()
+
+    async def event_gen():
+        try:
+            while True:
+                try:
+                    tick = q.get_nowait()
+                    yield f"data: {json.dumps(tick)}\n\n"
+                except stdlib_queue.Empty:
+                    yield ": keepalive\n\n"
+                    await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            state.unsubscribe_ticks(q)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── JSON API ──────────────────────────────────────────────────────────────────

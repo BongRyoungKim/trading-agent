@@ -104,6 +104,41 @@ def atr(
     return tr.ewm(alpha=1 / period, adjust=False).mean()
 
 
+def adx(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    period: int = 14,
+) -> pd.Series:
+    """
+    Average Directional Index — measures trend strength (not direction).
+    Values ≥ 25 indicate a trending market; < 25 indicates ranging/choppy.
+    Uses Wilder's smoothing (EMA with alpha=1/period).
+    """
+    alpha = 1.0 / period
+    h = high.reset_index(drop=True)
+    l = low.reset_index(drop=True)
+    c = close.reset_index(drop=True)
+
+    prev_c = c.shift(1)
+    tr = pd.concat([(h - l), (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
+
+    up   = h.diff()
+    down = -l.diff()
+    pdm  = up.where((up > down) & (up > 0), 0.0)
+    ndm  = down.where((down > up) & (down > 0), 0.0)
+
+    tr_s  = tr.ewm(alpha=alpha, adjust=False).mean()
+    pdm_s = pdm.ewm(alpha=alpha, adjust=False).mean()
+    ndm_s = ndm.ewm(alpha=alpha, adjust=False).mean()
+
+    pdi = 100.0 * pdm_s / tr_s.replace(0, float("nan"))
+    ndi = 100.0 * ndm_s / tr_s.replace(0, float("nan"))
+
+    dx = 100.0 * (pdi - ndi).abs() / (pdi + ndi).replace(0, float("nan"))
+    return dx.ewm(alpha=alpha, adjust=False).mean().fillna(0.0)
+
+
 def vwap(
     high: pd.Series,
     low: pd.Series,
