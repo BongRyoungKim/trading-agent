@@ -235,13 +235,45 @@ def main() -> None:
     portfolio = PortfolioTracker.from_store(initial_cash=initial_capital, store=position_store)
 
     restored_positions = len(portfolio.open_symbols())
+
+    # When the service restarts with open positions, krw.free excludes the capital
+    # locked in those positions.  Add the current market value of each restored
+    # position so the risk manager starts from the true portfolio value and does
+    # not compute a false drawdown that permanently blocks new orders.
+    risk_capital = initial_capital
+    if restored_positions and effective_mode == "live":
+        for sym in portfolio.open_symbols():
+            pos = portfolio.get_position(sym)
+            if pos is None:
+                continue
+            try:
+                ticker = exchange.get_ticker(sym)
+                position_value = pos.amount * ticker.last
+                risk_capital += position_value
+                logger.info(
+                    "Risk capital adjusted for restored position",
+                    symbol=sym,
+                    position_value=float(position_value),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not fetch ticker for restored position — using entry price",
+                    symbol=sym,
+                    error=str(exc),
+                )
+                risk_capital += pos.amount * pos.entry_price
+
     risk_state = PortfolioState(
-        capital=initial_capital,
-        peak_capital=initial_capital,
+        capital=risk_capital,
+        peak_capital=risk_capital,
         open_positions=restored_positions,
     )
     if restored_positions:
-        logger.info("Risk state initialised with restored positions", open_positions=restored_positions)
+        logger.info(
+            "Risk state initialised with restored positions",
+            open_positions=restored_positions,
+            risk_capital=float(risk_capital),
+        )
     risk_manager = RiskManager(settings, risk_state)
 
     if args.symbol_strategies:

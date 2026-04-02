@@ -516,7 +516,7 @@ class TradingEngine:
             )
             return
         except RiskError as exc:
-            logger.warning("Risk check blocked open", symbol=symbol, reason=str(exc))
+            logger.warning(f"Risk check blocked open: {exc}", symbol=symbol)
             self._telegram.send_risk_alert(str(exc))
             return
 
