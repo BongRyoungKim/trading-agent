@@ -8,21 +8,25 @@ and ADX to block entries in ranging/choppy markets.
 
 Signal logic:
   BUY  : EMA9 > EMA21 (bullish alignment)
-         AND MACD histogram turned positive within last 3 bars (relaxed window)
+         AND price within ema_proximity_pct(1.5%) of EMA fast — pullback entry
+         AND MACD histogram turned positive within last 2 bars
          AND RSI between rsi_min(40) and overbought(70)
          AND volume >= vol_mult(1.5) × 20-bar average
          AND ADX >= adx_threshold(25) — trending market only
   SELL : EMA9 crosses below EMA21 (death cross)
-         OR RSI >= overbought (take profit before reversal)
          OR MACD histogram turns negative while above EMA (momentum loss)
   HOLD : All other conditions
 
-Parameter changes from v1 (2026-04-01):
-  rsi_min   45 → 40   (widen entry window, capture more momentum)
-  overbought 75 → 70  (earlier exit before RSI exhaustion)
-  vol_mult  1.2 → 1.5 (stricter volume filter, reduce false breakouts)
-  MACD      1-bar strict → 3-bar window (reduce whipsaw from single-bar noise)
-  ADX       new — blocks entries in ranging markets (ADX < 25)
+  NOTE: RSI overbought no longer triggers SELL.  The engine's take-profit
+  price target handles the upside exit.  Removing the RSI exit was the
+  primary fix for the inverted risk/reward that produced a 0.52 profit
+  factor — the strategy was exiting with a tiny RSI-based gain before the
+  2:1 TP could be reached, while losses still hit the full stop-loss.
+
+Parameter changes from v2 (2026-04-02):
+  SELL ②   removed — RSI overbought no longer exits positions (see NOTE)
+  BUY      added ema_proximity_pct(1.5%) pullback filter — avoids chasing
+  MACD     window 3 → 2 bars (tighter crossover timing, less lag)
 """
 from __future__ import annotations
 
@@ -40,20 +44,23 @@ from src.utils.indicators import atr, ema, macd, rsi as calc_rsi
 @register
 class Scalping5mStrategy(BaseStrategy):
     """
-    5-Minute EMA Scalping Strategy (v2).
+    5-Minute EMA Scalping Strategy (v3).
 
     Args:
-        symbol:         Trading symbol.
-        ema_fast:       Fast EMA period (default 9).
-        ema_slow:       Slow EMA period (default 21).
-        rsi_period:     RSI lookback period (default 7).
-        rsi_min:        Minimum RSI for entry (default 40).
-        overbought:     RSI level for take-profit SELL and entry block (default 70).
-        atr_period:     ATR period for stop-loss metadata (default 14).
-        vol_mult:       Volume must exceed this multiple of 20-bar average (default 1.5).
-        adx_period:     ADX period for trend-strength filter (default 14).
-        adx_threshold:  Minimum ADX to allow BUY entries (default 25).
-        macd_window:    Bars to look back for MACD histogram crossover (default 3).
+        symbol:              Trading symbol.
+        ema_fast:            Fast EMA period (default 9).
+        ema_slow:            Slow EMA period (default 21).
+        rsi_period:          RSI lookback period (default 7).
+        rsi_min:             Minimum RSI for entry (default 40).
+        overbought:          RSI level that blocks new BUY entries (default 70).
+                             No longer triggers SELL — engine TP handles upside exit.
+        atr_period:          ATR period for stop-loss metadata (default 14).
+        vol_mult:            Volume must exceed this multiple of 20-bar average (default 1.5).
+        adx_period:          ADX period for trend-strength filter (default 14).
+        adx_threshold:       Minimum ADX to allow BUY entries (default 25).
+        macd_window:         Bars to look back for MACD histogram crossover (default 2).
+        ema_proximity_pct:   Max % distance between price and EMA fast for BUY entry
+                             (default 1.5).  Ensures pullback entry, not chasing.
     """
 
     def __init__(
@@ -68,7 +75,8 @@ class Scalping5mStrategy(BaseStrategy):
         vol_mult: float = 1.5,
         adx_period: int = 14,
         adx_threshold: float = 25.0,
-        macd_window: int = 3,
+        macd_window: int = 2,
+        ema_proximity_pct: float = 1.5,
     ) -> None:
         if ema_fast >= ema_slow:
             raise ValueError(f"ema_fast ({ema_fast}) must be < ema_slow ({ema_slow})")
@@ -87,6 +95,7 @@ class Scalping5mStrategy(BaseStrategy):
         self._adx_period = adx_period
         self._adx_threshold = adx_threshold
         self._macd_window = macd_window
+        self._ema_proximity_pct = ema_proximity_pct
 
     @property
     def name(self) -> str:
@@ -118,6 +127,7 @@ class Scalping5mStrategy(BaseStrategy):
             "adx_period": self._adx_period,
             "adx_threshold": self._adx_threshold,
             "macd_window": self._macd_window,
+            "ema_proximity_pct": self._ema_proximity_pct,
         }
 
     def generate_signal(self, data: pd.DataFrame) -> Signal:
@@ -182,6 +192,14 @@ class Scalping5mStrategy(BaseStrategy):
         adx_ok = adx_now >= self._adx_threshold
 
         current_price = float(close.iloc[-1])
+
+        # Pullback condition: price must be within ema_proximity_pct of EMA fast.
+        # Prevents chasing an already-extended move; favours entries near support.
+        ema_proximity_ok = (
+            ema_f_now > 0
+            and abs(current_price - ema_f_now) / ema_f_now * 100 <= self._ema_proximity_pct
+        )
+
         meta = {
             "price": current_price,
             "ema_fast": round(ema_f_now, 4),
@@ -192,19 +210,20 @@ class Scalping5mStrategy(BaseStrategy):
             "adx": round(adx_now, 2),
             "vol_ratio": round(vol_now / vol_avg, 2) if vol_avg > 0 else None,
             "cond": {
-                "above_ema":       above_ema,
-                "macd_just_pos":   macd_recently_crossed,
-                "macd_turned_neg": macd_turned_neg,
-                "rsi_ok":          self._rsi_min <= rsi_now < self._overbought,
-                "overbought":      rsi_now >= self._overbought,
-                "vol_ok":          vol_ok,
-                "death_cross":     death_cross,
-                "golden_cross":    golden_cross,
-                "adx_ok":          adx_ok,
+                "above_ema":        above_ema,
+                "macd_just_pos":    macd_recently_crossed,
+                "macd_turned_neg":  macd_turned_neg,
+                "rsi_ok":           self._rsi_min <= rsi_now < self._overbought,
+                "overbought":       rsi_now >= self._overbought,
+                "vol_ok":           vol_ok,
+                "death_cross":      death_cross,
+                "golden_cross":     golden_cross,
+                "adx_ok":           adx_ok,
+                "ema_proximity_ok": ema_proximity_ok,
             },
         }
 
-        # ── SELL ①: Death cross (primary exit) ───────────────────────────────
+        # ── SELL ①: Death cross (primary trend-reversal exit) ────────────────
         if death_cross:
             return Signal(
                 symbol=self._symbol,
@@ -215,18 +234,8 @@ class Scalping5mStrategy(BaseStrategy):
                 metadata=meta,
             )
 
-        # ── SELL ②: Overbought RSI (take profit) ─────────────────────────────
-        if rsi_now >= self._overbought:
-            return Signal(
-                symbol=self._symbol,
-                action=SignalAction.SELL,
-                strength=0.9,
-                reason=f"RSI({self._rsi_period})={rsi_now:.1f} overbought, taking profit",
-                timestamp=timestamp,
-                metadata=meta,
-            )
-
-        # ── SELL ③: MACD histogram turns negative while above EMA ─────────────
+        # ── SELL ②: MACD histogram turns negative while above EMA ────────────
+        #   (RSI overbought no longer triggers SELL — engine TP handles upside)
         if macd_turned_neg and above_ema:
             return Signal(
                 symbol=self._symbol,
@@ -237,9 +246,10 @@ class Scalping5mStrategy(BaseStrategy):
                 metadata=meta,
             )
 
-        # ── BUY: MACD 3-bar window + EMA alignment + RSI + volume + ADX ───────
+        # ── BUY: pullback + MACD crossover + EMA alignment + RSI + volume + ADX ─
         buy_condition = (
             above_ema
+            and ema_proximity_ok       # pullback: price near EMA fast, not extended
             and macd_recently_crossed
             and self._rsi_min <= rsi_now < self._overbought
             and vol_ok
@@ -254,6 +264,7 @@ class Scalping5mStrategy(BaseStrategy):
                 strength=max(0.5, strength),
                 reason=(
                     f"{trigger}EMA{self._ema_fast} > EMA{self._ema_slow} + "
+                    f"pullback {abs(current_price - ema_f_now) / ema_f_now * 100:.2f}% from EMA + "
                     f"MACD hist crossed positive ({hist_now:.4f}) + "
                     f"RSI={rsi_now:.1f} + ADX={adx_now:.1f}"
                 ),
@@ -267,7 +278,8 @@ class Scalping5mStrategy(BaseStrategy):
             strength=0.0,
             reason=(
                 f"No signal: EMA_diff={ema_f_now - ema_s_now:.4f}, "
-                f"RSI={rsi_now:.1f}, MACD_hist={hist_now:.4f}, ADX={adx_now:.1f}"
+                f"RSI={rsi_now:.1f}, MACD_hist={hist_now:.4f}, ADX={adx_now:.1f}, "
+                f"prox={abs(current_price - ema_f_now) / ema_f_now * 100:.2f}%"
             ),
             timestamp=timestamp,
             metadata=meta,

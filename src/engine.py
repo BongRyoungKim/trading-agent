@@ -468,9 +468,11 @@ class TradingEngine:
             atr_value=float(atr_val) if atr_val else None,
             atr_multiplier=1.5,
         )
-        # Take profit: 2× the stop-loss distance (minimum 3% above entry — achievable for scalps)
+        # Take profit: 2× the stop-loss distance (minimum 1.5% above entry).
+        # Lowered from 3% — the old 3% floor was unreachable on low-ATR scalps
+        # and forced RSI-exit to fire first, collapsing the intended 2:1 R:R.
         sl_distance = price - stop_loss
-        tp_distance = max(sl_distance * Decimal("2"), price * Decimal("0.03"))
+        tp_distance = max(sl_distance * Decimal("2"), price * Decimal("0.015"))
         take_profit = price + tp_distance
 
         amount = fixed_fraction(
