@@ -945,18 +945,28 @@ def _render_balance(balance: list[dict]) -> str:
             f' <span style="color:#64748b;font-size:.75rem">(주문중: {used:.8f}'.rstrip("0").rstrip(".") + ")</span>"
             if used > 0 else ""
         )
+        avg_buy_price = b.get("avg_buy_price", 0.0)
+        buy_amount = b.get("buy_amount", 0)
+        fmt_avg = (
+            f"₩{avg_buy_price:,.0f}" if avg_buy_price >= 1
+            else f"₩{avg_buy_price:.4f}" if avg_buy_price > 0
+            else "-"
+        )
+        fmt_buy_amt = f"₩{buy_amount:,}" if buy_amount > 0 else "-"
         rows.append(
             f"<tr>"
             f"<td><strong>{currency}</strong></td>"
             f"<td>{fmt_qty}{used_html}</td>"
             f"<td style='color:#94a3b8'>{fmt_price}</td>"
             f"<td style='color:#10b981;font-weight:600'>{fmt_eval}</td>"
+            f"<td style='color:#60a5fa'>{fmt_avg}</td>"
+            f"<td style='color:#a78bfa'>{fmt_buy_amt}</td>"
             f"</tr>"
         )
     total_eval = sum(b.get("eval_amount", 0) for b in balance)
     table = (
         "<table><thead><tr>"
-        "<th>코인</th><th>수량</th><th>현재가</th><th>평가금액</th>"
+        "<th>코인</th><th>수량</th><th>현재가</th><th>평가금액</th><th>매수평균가</th><th>매수금액</th>"
         "</tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
