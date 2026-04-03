@@ -8,25 +8,27 @@ and ADX to block entries in ranging/choppy markets.
 
 Signal logic:
   BUY  : EMA9 > EMA21 (bullish alignment)
-         AND price within ema_proximity_pct(1.5%) of EMA fast — pullback entry
-         AND MACD histogram turned positive within last 2 bars
-         AND RSI between rsi_min(40) and overbought(70)
-         AND volume >= vol_mult(1.5) × 20-bar average
-         AND ADX >= adx_threshold(25) — trending market only
-  SELL : EMA9 crosses below EMA21 (death cross)
-         OR MACD histogram turns negative while above EMA (momentum loss)
+         AND price within ema_proximity_pct(3.0%) of EMA fast — pullback entry
+         AND MACD histogram turned positive within last 3 bars
+         AND RSI between rsi_min(35) and overbought(70)
+         AND volume >= vol_mult(1.2) × 20-bar average
+         AND ADX >= adx_threshold(22) — trending market only
+  SELL : EMA9 crosses below EMA21 (death cross) — only hard exit
+         MACD-turned-negative exit removed (v4): it was firing before
+         SL could protect, causing uncontrolled losses. Engine SL/TP
+         now handles all downside exits.
   HOLD : All other conditions
 
-  NOTE: RSI overbought no longer triggers SELL.  The engine's take-profit
-  price target handles the upside exit.  Removing the RSI exit was the
-  primary fix for the inverted risk/reward that produced a 0.52 profit
-  factor — the strategy was exiting with a tiny RSI-based gain before the
-  2:1 TP could be reached, while losses still hit the full stop-loss.
-
-Parameter changes from v2 (2026-04-02):
-  SELL ②   removed — RSI overbought no longer exits positions (see NOTE)
-  BUY      added ema_proximity_pct(1.5%) pullback filter — avoids chasing
-  MACD     window 3 → 2 bars (tighter crossover timing, less lag)
+Parameter changes from v3 (2026-04-03 → v4 2026-04-03):
+  BUY  ema_proximity_pct  1.5 → 3.0  (wider pullback tolerance → more signals)
+  BUY  rsi_min            40  → 35   (accept slightly deeper pullbacks)
+  BUY  vol_mult           1.5 → 1.2  (relax volume filter — less whipsaw exclusion)
+  BUY  adx_threshold      25  → 22   (include moderately trending markets)
+  BUY  macd_window        2   → 3    (slightly wider crossover window)
+  SELL ②  removed — MACD histogram negative no longer exits positions.
+          Root cause of -20K DOOD, -19K ELSA losses: signal SELL fired
+          before SL could control the loss. Engine ATR stop (2×) now sole
+          downside gate; death cross remains as strategy-level trend exit.
 """
 from __future__ import annotations
 
@@ -51,16 +53,16 @@ class Scalping5mStrategy(BaseStrategy):
         ema_fast:            Fast EMA period (default 9).
         ema_slow:            Slow EMA period (default 21).
         rsi_period:          RSI lookback period (default 7).
-        rsi_min:             Minimum RSI for entry (default 40).
+        rsi_min:             Minimum RSI for entry (default 35).
         overbought:          RSI level that blocks new BUY entries (default 70).
-                             No longer triggers SELL — engine TP handles upside exit.
+                             Does not trigger SELL — engine TP handles upside exit.
         atr_period:          ATR period for stop-loss metadata (default 14).
-        vol_mult:            Volume must exceed this multiple of 20-bar average (default 1.5).
+        vol_mult:            Volume must exceed this multiple of 20-bar average (default 1.2).
         adx_period:          ADX period for trend-strength filter (default 14).
-        adx_threshold:       Minimum ADX to allow BUY entries (default 25).
-        macd_window:         Bars to look back for MACD histogram crossover (default 2).
+        adx_threshold:       Minimum ADX to allow BUY entries (default 22).
+        macd_window:         Bars to look back for MACD histogram crossover (default 3).
         ema_proximity_pct:   Max % distance between price and EMA fast for BUY entry
-                             (default 1.5).  Ensures pullback entry, not chasing.
+                             (default 3.0).  Ensures pullback entry, not chasing.
     """
 
     def __init__(
@@ -69,14 +71,14 @@ class Scalping5mStrategy(BaseStrategy):
         ema_fast: int = 9,
         ema_slow: int = 21,
         rsi_period: int = 7,
-        rsi_min: float = 40.0,
+        rsi_min: float = 35.0,
         overbought: float = 70.0,
         atr_period: int = 14,
-        vol_mult: float = 1.5,
+        vol_mult: float = 1.2,
         adx_period: int = 14,
-        adx_threshold: float = 25.0,
-        macd_window: int = 2,
-        ema_proximity_pct: float = 1.5,
+        adx_threshold: float = 22.0,
+        macd_window: int = 3,
+        ema_proximity_pct: float = 3.0,
     ) -> None:
         if ema_fast >= ema_slow:
             raise ValueError(f"ema_fast ({ema_fast}) must be < ema_slow ({ema_slow})")
@@ -231,18 +233,6 @@ class Scalping5mStrategy(BaseStrategy):
                 action=SignalAction.SELL,
                 strength=1.0,
                 reason=f"EMA{self._ema_fast} crossed below EMA{self._ema_slow} (death cross)",
-                timestamp=timestamp,
-                metadata=meta,
-            )
-
-        # ── SELL ②: MACD histogram turns negative while above EMA ────────────
-        #   (RSI overbought no longer triggers SELL — engine TP handles upside)
-        if macd_turned_neg and above_ema:
-            return Signal(
-                symbol=self._symbol,
-                action=SignalAction.SELL,
-                strength=0.7,
-                reason=f"MACD histogram turned negative ({hist_now:.4f}), momentum fading",
                 timestamp=timestamp,
                 metadata=meta,
             )

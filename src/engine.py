@@ -487,13 +487,13 @@ class TradingEngine:
         stop_loss = self._risk_manager.calculate_stop_loss(
             price, side="buy",
             atr_value=float(atr_val) if atr_val else None,
-            atr_multiplier=1.5,
+            atr_multiplier=2.0,  # widened from 1.5 — fewer false stop-outs
         )
-        # Take profit: 2× the stop-loss distance (minimum 1.5% above entry).
-        # Lowered from 3% — the old 3% floor was unreachable on low-ATR scalps
-        # and forced RSI-exit to fire first, collapsing the intended 2:1 R:R.
+        # Take profit: 2× the stop-loss distance (minimum 2.0% above entry).
+        # Floor raised from 1.5% → 2.0%: MACD-SELL exit removed so TP must be
+        # reachable; wider SL (2×ATR) makes 2% floor appropriate.
         sl_distance = price - stop_loss
-        tp_distance = max(sl_distance * Decimal("2"), price * Decimal("0.015"))
+        tp_distance = max(sl_distance * Decimal("2"), price * Decimal("0.02"))
         take_profit = price + tp_distance
 
         amount = fixed_fraction(
