@@ -613,9 +613,10 @@ function renderEquity(pts) {{
     if (date.startsWith(prefix)) byDate[date] = p.pnl || 0;
   }});
 
-  // 1일~오늘까지 전체 날짜 배열 생성 (carry-forward)
+  // 1일~말일 전체 날짜 배열 생성 (carry-forward, 미래는 직전값 유지)
+  const lastDay = new Date(yyyy, today.getMonth() + 1, 0).getDate();
   const allDates = [];
-  for (let d = 1; d <= today.getDate(); d++) {{
+  for (let d = 1; d <= lastDay; d++) {{
     allDates.push(`${{prefix}}-${{String(d).padStart(2, '0')}}`);
   }}
 
@@ -768,6 +769,7 @@ def _render_stats(stats: dict) -> str:
 
 def _render_equity_svg(equity: list[dict]) -> str:
     """Render current-month cumulative P&L bar chart as inline SVG."""
+    import calendar as _cal
     from datetime import date as _date, timedelta
 
     if not equity:
@@ -775,6 +777,8 @@ def _render_equity_svg(equity: list[dict]) -> str:
 
     today = _date.today()
     prefix = today.strftime("%Y-%m")
+    last_day = _cal.monthrange(today.year, today.month)[1]
+    month_end = today.replace(day=last_day)
 
     # 이번 달 날짜별 마지막 누적 손익
     by_date: dict[str, float] = {}
@@ -783,10 +787,10 @@ def _render_equity_svg(equity: list[dict]) -> str:
         if d.startswith(prefix):
             by_date[d] = float(pt.get("pnl", 0.0))
 
-    # 1일~오늘 전체 날짜 carry-forward
+    # 1일~말일 전체 날짜 carry-forward (미래 날짜는 직전값 유지)
     all_dates: list[str] = []
     cur = today.replace(day=1)
-    while cur <= today:
+    while cur <= month_end:
         all_dates.append(cur.strftime("%Y-%m-%d"))
         cur += timedelta(days=1)
 
