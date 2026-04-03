@@ -594,18 +594,25 @@ function renderPositions(positions) {{
     const sl = p.stop_loss != null ? fmtKRW(p.stop_loss) : '—';
     const tp = p.take_profit != null ? fmtKRW(p.take_profit) : '—';
     const dt = p.entry_time ? p.entry_time.substring(0,16).replace('T',' ') : '-';
+    const cur = p.current_price != null ? fmtKRW(p.current_price) : '—';
+    const pnl = p.unrealized_pnl ?? 0;
+    const pnlPct = p.pnl_pct ?? 0;
+    const pnlColor = pnl >= 0 ? '#10b981' : '#ef4444';
+    const pnlStr = `<span style="color:${{pnlColor}};font-weight:600">₩${{Math.round(pnl).toLocaleString('ko-KR',{{signDisplay:'always'}})}} (${{pnlPct >= 0 ? '+' : ''}}${{pnlPct.toFixed(2)}}%)</span>`;
     return `<tr>
       <td><code>${{p.symbol}}</code></td>
       <td>${{(p.side||'').toUpperCase()}}</td>
-      <td style="color:#94a3b8">${{p.amount != null ? p.amount.toFixed(6) : '-'}}</td>
+      <td style="color:#94a3b8">${{p.amount != null ? p.amount.toFixed(4) : '-'}}</td>
       <td style="font-weight:600">${{fmtKRW(p.entry_price)}}</td>
+      <td style="font-weight:600">${{cur}}</td>
+      <td>${{pnlStr}}</td>
       <td style="color:#ef4444">${{sl}}</td>
       <td style="color:#10b981">${{tp}}</td>
       <td style="color:#64748b;font-size:.78rem">${{dt}}</td>
     </tr>`;
   }});
   el.innerHTML = `<table><thead><tr>
-    <th>종목</th><th>방향</th><th>수량</th><th>진입가</th><th>손절가</th><th>목표가</th><th>진입 시각</th>
+    <th>종목</th><th>방향</th><th>수량</th><th>진입가</th><th>현재가</th><th>평가손익</th><th>손절가</th><th>목표가</th><th>진입 시각</th>
   </tr></thead><tbody>${{rows.join('')}}</tbody></table>`;
 }}
 async function refreshPositionsTrades() {{
@@ -979,20 +986,29 @@ def _render_positions(positions: list[dict]) -> str:
         tp = f"{pos['take_profit']:,.2f}" if pos.get("take_profit") else "—"
         entry_time = pos.get("entry_time", "")
         dt = entry_time[:16].replace("T", " ") if entry_time else "-"
+        cur = pos.get("current_price")
+        cur_str = f"{cur:,.2f}" if cur is not None else "—"
+        pnl = pos.get("unrealized_pnl", 0.0)
+        pnl_pct = pos.get("pnl_pct", 0.0)
+        pnl_color = "#10b981" if pnl >= 0 else "#ef4444"
+        pnl_str = f"<span style='color:{pnl_color};font-weight:600'>₩{pnl:+,.0f} ({pnl_pct:+.2f}%)</span>"
         rows.append(
             f"<tr>"
             f"<td><code>{pos['symbol']}</code></td>"
             f"<td>{pos['side'].upper()}</td>"
-            f"<td>{pos['amount']:.6f}</td>"
+            f"<td>{pos['amount']:.4f}</td>"
             f"<td>{pos['entry_price']:,.2f}</td>"
-            f"<td>{sl}</td><td>{tp}</td>"
+            f"<td style='font-weight:600'>{cur_str}</td>"
+            f"<td>{pnl_str}</td>"
+            f"<td style='color:#ef4444'>{sl}</td><td style='color:#10b981'>{tp}</td>"
             f"<td style='color:#64748b;font-size:.78rem'>{dt}</td>"
             f"</tr>"
         )
     return (
         "<table><thead><tr>"
         "<th>종목</th><th>방향</th><th>수량</th>"
-        "<th>진입가</th><th>손절가</th><th>목표가</th><th>진입 시각</th>"
+        "<th>진입가</th><th>현재가</th><th>평가손익</th>"
+        "<th>손절가</th><th>목표가</th><th>진입 시각</th>"
         "</tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"

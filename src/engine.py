@@ -407,6 +407,20 @@ class TradingEngine:
                 self._close_position(symbol, forced_price=price, reason="take_profit")
                 return
 
+            # ── Step 1b: time-based stop — cut losers after 45 min ───────────
+            hold_min = (datetime.now(UTC) - pos.entry_time).total_seconds() / 60
+            if hold_min >= 45 and price < pos.entry_price * Decimal("0.997"):
+                logger.info(
+                    "Time-stop triggered — position losing after 45 min",
+                    symbol=symbol,
+                    hold_min=round(hold_min),
+                    entry_price=float(pos.entry_price),
+                    price=float(price),
+                    loss_pct=round(float((price - pos.entry_price) / pos.entry_price * 100), 2),
+                )
+                self._close_position(symbol, forced_price=price, reason="time_stop")
+                return
+
         # ── Step 2: strategy signal ───────────────────────────────────────────
         strategy = self._resolve_strategy(symbol)
         df = self._exchange.get_ohlcv_dataframe(
@@ -482,18 +496,21 @@ class TradingEngine:
         ticker = self._exchange.get_ticker(symbol)
         price = ticker.last
 
-        # ATR-based SL if available from signal metadata
+        # ATR-based SL: 1×ATR, hard-capped at 0.8% below entry.
+        # Tighter SL → smaller losses → better RR ratio.
         atr_val = signal_.metadata.get("atr") if signal_ and signal_.metadata else None
         stop_loss = self._risk_manager.calculate_stop_loss(
             price, side="buy",
             atr_value=float(atr_val) if atr_val else None,
-            atr_multiplier=2.0,  # widened from 1.5 — fewer false stop-outs
+            atr_multiplier=1.0,
         )
-        # Take profit: 2× the stop-loss distance (minimum 2.0% above entry).
-        # Floor raised from 1.5% → 2.0%: MACD-SELL exit removed so TP must be
-        # reachable; wider SL (2×ATR) makes 2% floor appropriate.
+        # Hard cap: SL no more than 0.8% below entry price.
+        sl_floor = price * Decimal("0.992")
+        if stop_loss < sl_floor:
+            stop_loss = sl_floor
+        # Take profit: 2× SL distance (2:1 RR, no artificial floor).
         sl_distance = price - stop_loss
-        tp_distance = max(sl_distance * Decimal("2"), price * Decimal("0.02"))
+        tp_distance = sl_distance * Decimal("2")
         take_profit = price + tp_distance
 
         amount = fixed_fraction(
@@ -507,8 +524,8 @@ class TradingEngine:
             logger.warning("Position sizing returned zero amount, skipping", symbol=symbol)
             return
 
-        # ── Cap notional at 95% of available cash (leave 5% for fees/rounding) ─
-        max_notional = self._portfolio.cash * Decimal("0.95")
+        # ── Cap notional at 99% of available cash (leave 1% for fees/rounding) ─
+        max_notional = self._portfolio.cash * Decimal("0.99")
         max_amount = max_notional / price
         if amount > max_amount:
             amount = max_amount

@@ -60,6 +60,9 @@ class Scalping5mStrategy(BaseStrategy):
         vol_mult:            Volume must exceed this multiple of 20-bar average (default 1.2).
         adx_period:          ADX period for trend-strength filter (default 14).
         adx_threshold:       Minimum ADX to allow BUY entries (default 22).
+        macd_fast:           MACD fast EMA period (default 12).
+        macd_slow:           MACD slow EMA period (default 26).
+        macd_signal:         MACD signal line period (default 9).
         macd_window:         Bars to look back for MACD histogram crossover (default 3).
         ema_proximity_pct:   Max % distance between price and EMA fast for BUY entry
                              (default 3.0).  Ensures pullback entry, not chasing.
@@ -71,13 +74,16 @@ class Scalping5mStrategy(BaseStrategy):
         ema_fast: int = 9,
         ema_slow: int = 21,
         rsi_period: int = 7,
-        rsi_min: float = 35.0,
-        overbought: float = 70.0,
+        rsi_min: float = 40.0,
+        overbought: float = 72.0,
         atr_period: int = 14,
-        vol_mult: float = 1.2,
+        vol_mult: float = 1.5,
         adx_period: int = 14,
-        adx_threshold: float = 22.0,
-        macd_window: int = 3,
+        adx_threshold: float = 25.0,
+        macd_fast: int = 12,
+        macd_slow: int = 26,
+        macd_signal: int = 9,
+        macd_window: int = 6,
         ema_proximity_pct: float = 3.0,
     ) -> None:
         if ema_fast >= ema_slow:
@@ -96,6 +102,9 @@ class Scalping5mStrategy(BaseStrategy):
         self._vol_lookback = 20
         self._adx_period = adx_period
         self._adx_threshold = adx_threshold
+        self._macd_fast = macd_fast
+        self._macd_slow = macd_slow
+        self._macd_signal = macd_signal
         self._macd_window = macd_window
         self._ema_proximity_pct = ema_proximity_pct
 
@@ -110,7 +119,7 @@ class Scalping5mStrategy(BaseStrategy):
     def min_required_bars(self) -> int:
         return max(
             self._ema_slow * 2,
-            26,
+            self._macd_slow * 2,
             self._atr_period + 1,
             self._vol_lookback + 1,
             self._adx_period * 2,
@@ -128,6 +137,9 @@ class Scalping5mStrategy(BaseStrategy):
             "vol_mult": self._vol_mult,
             "adx_period": self._adx_period,
             "adx_threshold": self._adx_threshold,
+            "macd_fast": self._macd_fast,
+            "macd_slow": self._macd_slow,
+            "macd_signal": self._macd_signal,
             "macd_window": self._macd_window,
             "ema_proximity_pct": self._ema_proximity_pct,
         }
@@ -145,7 +157,7 @@ class Scalping5mStrategy(BaseStrategy):
         # ── Indicators ────────────────────────────────────────────────────────
         ema_f      = ema(close, self._ema_fast)
         ema_s      = ema(close, self._ema_slow)
-        macd_df    = macd(close)
+        macd_df    = macd(close, fast=self._macd_fast, slow=self._macd_slow, signal=self._macd_signal)
         rsi_series = calc_rsi(close, self._rsi_period)
         adx_series = calc_adx(data["high"], data["low"], close, self._adx_period)
 

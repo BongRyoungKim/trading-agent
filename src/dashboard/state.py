@@ -78,17 +78,32 @@ class DashboardState:
         eng = self.engine
         if eng is None:
             return []
-        report = eng._portfolio.pnl_report()  # noqa: SLF001
         positions = []
+        latest_ticks: dict = getattr(eng, "_latest_ticks", {})  # noqa: SLF001
         for sym in eng._portfolio.open_symbols():  # noqa: SLF001
             pos = eng._portfolio.get_position(sym)
             if pos is None:
                 continue
+            # Use price from latest tick cache (already fetched by engine; avoids rate-limit hits).
+            # Fall back to entry_price if tick not yet available.
+            tick = latest_ticks.get(sym, {})
+            tick_price = (tick.get("metadata") or {}).get("price")
+            try:
+                current_price = float(tick_price) if tick_price is not None else float(pos.entry_price)
+            except Exception:  # noqa: BLE001
+                current_price = float(pos.entry_price)
+            entry = float(pos.entry_price)
+            amount = float(pos.amount)
+            unrealized_pnl = (current_price - entry) * amount
+            pnl_pct = (current_price - entry) / entry * 100 if entry else 0.0
             positions.append({
                 "symbol": sym,
                 "side": pos.side,
-                "amount": float(pos.amount),
-                "entry_price": float(pos.entry_price),
+                "amount": amount,
+                "entry_price": entry,
+                "current_price": current_price,
+                "unrealized_pnl": round(unrealized_pnl, 2),
+                "pnl_pct": round(pnl_pct, 2),
                 "entry_time": pos.entry_time.isoformat(),
                 "stop_loss": float(pos.stop_loss) if pos.stop_loss is not None else None,
                 "take_profit": float(pos.take_profit) if pos.take_profit is not None else None,
