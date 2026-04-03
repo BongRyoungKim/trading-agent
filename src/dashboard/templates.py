@@ -206,7 +206,7 @@ let _positionsMap = {{}};  // symbol → position (entry_price, amount)
 let _activeTickTab = 0;
 function switchTickTab(idx) {{
   _activeTickTab = idx;
-  [0,1,2].forEach(i => {{
+  [0,1].forEach(i => {{
     const p = document.getElementById('tick-panel-'+i);
     const b = document.getElementById('tick-tab-'+i);
     if (p) p.style.display = i===idx ? '' : 'none';
@@ -469,14 +469,16 @@ function renderTicks(items, flashSymbol, prevTick) {{
   const fmtKRW = v => v != null ? '₩' + Math.round(v).toLocaleString('ko-KR') : '-';
 
   const thead = `<table class="ticks-table"><thead><tr>
+    <th style="width:2rem;text-align:center">#</th>
     <th>종목</th><th>신호</th><th>현재가</th>
-    <th title="거래금액 (KRW)">거래금액</th>
+    <th title="거래대금 (KRW)">거래대금</th>
     <th title="RSI">RSI</th>
     <th title="MACD histogram">MACD</th>
     <th>시각</th>
   </tr></thead><tbody>`;
 
-  const mkRows = (group) => group.map(t => {{
+  const mkRows = (group, offset) => group.map((t, idx) => {{
+    const rank = offset + idx + 1;
     const m = t.metadata || {{}};
     const c = m.cond || {{}};
     const rsi = m.rsi != null ? m.rsi.toFixed(1) : '-';
@@ -491,6 +493,7 @@ function renderTicks(items, flashSymbol, prevTick) {{
     const flash = flashSymbol === t.symbol ? ' tick-flash' : '';
     const actionDot = actionChanged ? `<span style="font-size:.65rem;color:#f59e0b;margin-left:.3rem">▲</span>` : '';
     return `<tr class="${{flash}}" id="tick-row-${{t.symbol.replace('/','_')}}">
+      <td style="text-align:center;color:#475569;font-size:.72rem;font-weight:600">${{rank}}</td>
       <td><code>${{t.symbol}}</code></td>
       <td><span class="badge" style="background:${{ac}}22;color:${{ac}}">${{t.action}}</span>${{actionDot}}</td>
       <td style="font-weight:600">${{price}}</td>
@@ -501,14 +504,14 @@ function renderTicks(items, flashSymbol, prevTick) {{
     </tr>`;
   }}).join('');
 
-  const groups = [items.slice(0,10), items.slice(10,20), items.slice(20,30)];
-  const labels = ['1-10위', '11-20위', '21-30위'];
+  const groups = [items.slice(0,10), items.slice(10,20)];
+  const labels = ['1-10위', '11-20위'];
   const tabBtns = labels.map((lbl, i) =>
     `<button class="tab${{_activeTickTab===i?' active':''}}" id="tick-tab-${{i}}" onclick="switchTickTab(${{i}})">${{lbl}}</button>`
   ).join('');
   const panels = groups.map((grp, i) =>
     `<div id="tick-panel-${{i}}" class="tick-panel"${{_activeTickTab===i?'':' style="display:none"'}}>${{
-      grp.length ? thead + mkRows(grp) + '</tbody></table>' : '<p class="empty">데이터 없음</p>'
+      grp.length ? thead + mkRows(grp, i*10) + '</tbody></table>' : '<p class="empty">데이터 없음</p>'
     }}</div>`
   ).join('');
 
@@ -919,11 +922,12 @@ def _render_ticks(ticks: list[dict]) -> str:
     )
     thead = (
         '<table class="ticks-table"><thead><tr>'
-        "<th>종목</th><th>신호</th><th>현재가</th><th>거래금액</th><th>RSI</th><th>MACD</th><th>시각</th>"
+        "<th style='width:2rem;text-align:center'>#</th>"
+        "<th>종목</th><th>신호</th><th>현재가</th><th>거래대금</th><th>RSI</th><th>MACD</th><th>시각</th>"
         "</tr></thead><tbody>"
     )
 
-    def _row(t: dict) -> str:
+    def _row(rank: int, t: dict) -> str:
         action = t.get("action", "HOLD")
         color = action_color.get(action, "#64748b")
         meta = t.get("metadata") or {}
@@ -942,6 +946,7 @@ def _render_ticks(ticks: list[dict]) -> str:
         ts = (t.get("timestamp") or "")[-8:-3]
         return (
             f"<tr>"
+            f"<td style='text-align:center;color:#475569;font-size:.72rem;font-weight:600'>{rank}</td>"
             f"<td><code>{sym}</code></td>"
             f"<td><span class='badge' style='background:{color}22;color:{color}'>{action}</span></td>"
             f"<td style='font-weight:600'>{price_str}</td>"
@@ -952,8 +957,8 @@ def _render_ticks(ticks: list[dict]) -> str:
             f"</tr>"
         )
 
-    groups = [ticks[0:10], ticks[10:20], ticks[20:30]]
-    labels = ["1-10위", "11-20위", "21-30위"]
+    groups = [ticks[0:10], ticks[10:20]]
+    labels = ["1-10위", "11-20위"]
     tab_btns = "".join(
         f'<button class="tab{" active" if i == 0 else ""}" id="tick-tab-{i}" '
         f'onclick="switchTickTab({i})">{lbl}</button>'
@@ -961,7 +966,7 @@ def _render_ticks(ticks: list[dict]) -> str:
     )
     panels = "".join(
         f'<div id="tick-panel-{i}" class="tick-panel"'
-        f'{" " if i == 0 else " style=\"display:none\""}>{"".join([thead] + [_row(t) for t in grp] + ["</tbody></table>"]) if grp else "<p class=\"empty\">데이터 없음</p>"}</div>'
+        f'{" " if i == 0 else " style=\"display:none\""}>{"".join([thead] + [_row(i*10+j+1, t) for j, t in enumerate(grp)] + ["</tbody></table>"]) if grp else "<p class=\"empty\">데이터 없음</p>"}</div>'
         for i, grp in enumerate(groups)
     )
     return (

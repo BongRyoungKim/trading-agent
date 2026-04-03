@@ -164,7 +164,7 @@ class UpbitClient(BaseExchangeClient):
             raise _map_ccxt_exception(exc, f"get_ticker:{symbol}") from exc
 
     @retry(max_attempts=3, base_delay=2.0)
-    def get_top_symbols_by_volume(self, n: int = 30) -> list[str]:
+    def get_top_symbols_by_volume(self, n: int = 20) -> list[str]:
         """
         Return top N active KRW-market symbols ranked by 24h quote volume
         (거래금액 = quoteVolume in KRW). Single fetch_tickers() call.
