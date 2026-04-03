@@ -3,6 +3,7 @@ Upbit exchange client wrapping ccxt.
 """
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Literal
 
 from loguru import logger
@@ -50,8 +51,26 @@ class UpbitClient(BaseExchangeClient):
     def get_balance(self) -> dict[str, Balance]:
         try:
             raw = self._exchange.fetch_balance()
+            # ccxt Upbit puts the raw Upbit API array in raw['info'].
+            # avg_buy_price lives there, NOT in per-currency dicts.
+            avg_buy_prices: dict[str, Decimal] = {}
+            info_list = raw.get("info", [])
+            if isinstance(info_list, list):
+                for item in info_list:
+                    if isinstance(item, dict):
+                        cur = item.get("currency", "")
+                        abp = item.get("avg_buy_price")
+                        if cur and abp:
+                            avg_buy_prices[cur] = Decimal(str(abp))
+
             return {
-                currency: Balance.from_ccxt(currency, data)
+                currency: Balance(
+                    currency=currency,
+                    free=Decimal(str(data.get("free") or 0)),
+                    used=Decimal(str(data.get("used") or 0)),
+                    total=Decimal(str(data.get("total") or 0)),
+                    avg_buy_price=avg_buy_prices.get(currency, Decimal(0)),
+                )
                 for currency, data in raw.items()
                 if isinstance(data, dict)
                 and float(data.get("total") or 0) > 0

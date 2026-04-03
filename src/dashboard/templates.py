@@ -511,26 +511,42 @@ function renderBalance(items) {{
   if (!items || items.length === 0) {{ el.innerHTML = '<p class="empty">잔고 없음</p>'; return; }}
   const fmtKRW = v => '₩' + Math.round(v).toLocaleString('ko-KR');
   const fmtQty = v => parseFloat(v.toFixed(8)).toString();
-  const rows = items.map(b => {{
-    const price = b.price || 0;
-    const evalAmt = b.eval_amount || 0;
-    const fmtPrice = price >= 1 ? fmtKRW(price) : '₩' + price.toFixed(4);
-    const used = b.used > 0 ? ` <span style="color:#64748b;font-size:.75rem">(주문중: ${{fmtQty(b.used)}})</span>` : '';
-    const avgBuyPrice = b.avg_buy_price || 0;
-    const avgPrice = avgBuyPrice > 0 ? (avgBuyPrice >= 1 ? fmtKRW(avgBuyPrice) : '₩' + avgBuyPrice.toFixed(4)) : '-';
-    const buyAmt   = b.buy_amount > 0 ? fmtKRW(b.buy_amount) : '-';
-    return `<tr>
-      <td><strong>${{b.currency}}</strong></td>
-      <td>${{fmtQty(b.free)}}${{used}}</td>
-      <td style="color:#94a3b8">${{fmtPrice}}</td>
-      <td style="color:#10b981;font-weight:600">${{fmtKRW(evalAmt)}}</td>
-      <td style="color:#60a5fa">${{avgPrice}}</td>
-      <td style="color:#a78bfa">${{buyAmt}}</td>
-    </tr>`;
+  const fmtPrice = v => v >= 1 ? fmtKRW(v) : '₩' + v.toFixed(6);
+  const cards = items.map(b => {{
+    const avgBuy = b.avg_buy_price || 0;
+    const usedRow = b.used > 0
+      ? `<div style="display:flex;justify-content:space-between;margin:.25rem 0">
+           <span style="color:#64748b;font-size:.75rem">주문중</span>
+           <span style="color:#64748b;font-size:.75rem">${{fmtQty(b.used)}}</span>
+         </div>` : '';
+    return `<div style="background:#0f172a;border:1px solid #334155;border-radius:.6rem;padding:.9rem">
+      <div style="font-size:1rem;font-weight:800;color:#f1f5f9;margin-bottom:.65rem;display:flex;justify-content:space-between;align-items:baseline">
+        <span>${{b.currency}}</span>
+        <span style="font-size:.7rem;font-weight:400;color:#64748b">${{fmtQty(b.free)}}</span>
+      </div>
+      ${{usedRow}}
+      <div style="display:flex;justify-content:space-between;margin:.25rem 0">
+        <span style="color:#64748b;font-size:.78rem">현재가</span>
+        <span style="color:#94a3b8;font-size:.82rem">${{fmtPrice(b.price || 0)}}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin:.25rem 0">
+        <span style="color:#64748b;font-size:.78rem">매수평균가</span>
+        <span style="color:#60a5fa;font-size:.82rem">${{avgBuy > 0 ? fmtPrice(avgBuy) : '-'}}</span>
+      </div>
+      <div style="border-top:1px solid #1e293b;margin:.55rem 0 .4rem"></div>
+      <div style="display:flex;justify-content:space-between;margin:.25rem 0">
+        <span style="color:#64748b;font-size:.78rem">매수금액</span>
+        <span style="color:#a78bfa;font-size:.82rem">${{b.buy_amount > 0 ? fmtKRW(b.buy_amount) : '-'}}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin:.25rem 0">
+        <span style="color:#64748b;font-size:.78rem">평가금액</span>
+        <span style="color:#10b981;font-weight:700;font-size:.88rem">${{fmtKRW(b.eval_amount || 0)}}</span>
+      </div>
+    </div>`;
   }});
   const total = items.reduce((s, b) => s + (b.eval_amount || 0), 0);
-  el.innerHTML = `<table><thead><tr><th>코인</th><th>수량</th><th>현재가</th><th>평가금액</th><th>매수평균가</th><th>매수금액</th></tr></thead><tbody>${{rows.join('')}}</tbody></table>
-    <div class="stat-row" style="margin-top:.6rem;border-top:1px solid #334155;padding-top:.6rem">
+  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.75rem">${{cards.join('')}}</div>
+    <div class="stat-row" style="margin-top:.75rem;border-top:1px solid #334155;padding-top:.6rem">
       <span class="stat-label">총 평가금액</span>
       <span class="stat-value" style="color:#10b981;font-weight:700">${{fmtKRW(total)}}</span>
     </div>`;
@@ -931,51 +947,72 @@ def _render_ticks(ticks: list[dict]) -> str:
 def _render_balance(balance: list[dict]) -> str:
     if not balance:
         return '<p class="empty">잔고 없음</p>'
-    rows = []
+
+    cards = []
     for b in balance:
         currency = b["currency"]
         free = b["free"]
         used = b["used"]
         price = b.get("price", 0.0)
         eval_amount = b.get("eval_amount", 0)
-        fmt_qty = f"{free:.8f}".rstrip("0").rstrip(".")
-        fmt_price = f"₩{price:,.0f}" if price >= 1 else f"₩{price:.4f}"
-        fmt_eval = f"₩{eval_amount:,}"
-        used_html = (
-            f' <span style="color:#64748b;font-size:.75rem">(주문중: {used:.8f}'.rstrip("0").rstrip(".") + ")</span>"
-            if used > 0 else ""
-        )
         avg_buy_price = b.get("avg_buy_price", 0.0)
         buy_amount = b.get("buy_amount", 0)
+
+        fmt_qty = f"{free:.8f}".rstrip("0").rstrip(".")
+        fmt_price = f"₩{price:,.0f}" if price >= 1 else f"₩{price:.6f}"
+        fmt_eval = f"₩{eval_amount:,}"
         fmt_avg = (
             f"₩{avg_buy_price:,.0f}" if avg_buy_price >= 1
-            else f"₩{avg_buy_price:.4f}" if avg_buy_price > 0
+            else f"₩{avg_buy_price:.6f}" if avg_buy_price > 0
             else "-"
         )
         fmt_buy_amt = f"₩{buy_amount:,}" if buy_amount > 0 else "-"
-        rows.append(
-            f"<tr>"
-            f"<td><strong>{currency}</strong></td>"
-            f"<td>{fmt_qty}{used_html}</td>"
-            f"<td style='color:#94a3b8'>{fmt_price}</td>"
-            f"<td style='color:#10b981;font-weight:600'>{fmt_eval}</td>"
-            f"<td style='color:#60a5fa'>{fmt_avg}</td>"
-            f"<td style='color:#a78bfa'>{fmt_buy_amt}</td>"
-            f"</tr>"
+        used_row = (
+            f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
+            f'<span style="color:#64748b;font-size:.75rem">주문중</span>'
+            f'<span style="color:#64748b;font-size:.75rem">{f"{used:.8f}".rstrip("0").rstrip(".")}</span>'
+            f'</div>'
+        ) if used > 0 else ""
+
+        cards.append(
+            f'<div style="background:#0f172a;border:1px solid #334155;border-radius:.6rem;padding:.9rem">'
+            f'<div style="font-size:1rem;font-weight:800;color:#f1f5f9;margin-bottom:.65rem;'
+            f'display:flex;justify-content:space-between;align-items:baseline">'
+            f'<span>{currency}</span>'
+            f'<span style="font-size:.7rem;font-weight:400;color:#64748b">{fmt_qty}</span>'
+            f'</div>'
+            f'{used_row}'
+            f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
+            f'<span style="color:#64748b;font-size:.78rem">현재가</span>'
+            f'<span style="color:#94a3b8;font-size:.82rem">{fmt_price}</span>'
+            f'</div>'
+            f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
+            f'<span style="color:#64748b;font-size:.78rem">매수평균가</span>'
+            f'<span style="color:#60a5fa;font-size:.82rem">{fmt_avg}</span>'
+            f'</div>'
+            f'<div style="border-top:1px solid #1e293b;margin:.55rem 0 .4rem"></div>'
+            f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
+            f'<span style="color:#64748b;font-size:.78rem">매수금액</span>'
+            f'<span style="color:#a78bfa;font-size:.82rem">{fmt_buy_amt}</span>'
+            f'</div>'
+            f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
+            f'<span style="color:#64748b;font-size:.78rem">평가금액</span>'
+            f'<span style="color:#10b981;font-weight:700;font-size:.88rem">{fmt_eval}</span>'
+            f'</div>'
+            f'</div>'
         )
+
     total_eval = sum(b.get("eval_amount", 0) for b in balance)
-    table = (
-        "<table><thead><tr>"
-        "<th>코인</th><th>수량</th><th>현재가</th><th>평가금액</th><th>매수평균가</th><th>매수금액</th>"
-        "</tr></thead><tbody>"
-        + "".join(rows)
-        + "</tbody></table>"
-        + f'<div class="stat-row" style="margin-top:.6rem;border-top:1px solid #334155;padding-top:.6rem">'
+    grid = (
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.75rem">'
+        + "".join(cards)
+        + "</div>"
+        + f'<div class="stat-row" style="margin-top:.75rem;border-top:1px solid #334155;padding-top:.6rem">'
         f'<span class="stat-label">총 평가금액</span>'
         f'<span class="stat-value" style="color:#10b981;font-weight:700">₩{total_eval:,}</span>'
         f"</div>"
     )
-    return table
+    return grid
 
 
 def _render_buy_history(trades: list[dict]) -> str:
