@@ -600,12 +600,33 @@ class TradingEngine:
                 order = self._exchange.place_order(symbol, "sell", position.amount)
             except Exception as exc:
                 logger.error(
-                    "Sell order failed — removing position to prevent retry loop",
-                    symbol=symbol,
-                    amount=float(position.amount),
-                    error=str(exc),
+                    f"Sell order failed: {exc} — removing position to prevent retry loop "
+                    f"| symbol={symbol} amount={float(position.amount):.4f}",
                 )
-                self._portfolio.close_position(symbol, price, commission=Decimal("0"))
+                pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
+                self._risk_manager.on_position_closed(pnl)
+                self._journal.record(
+                    TradeRecord(
+                        symbol=symbol,
+                        side=position.side,
+                        amount=position.amount,
+                        entry_price=position.entry_price,
+                        exit_price=price,
+                        entry_time=position.entry_time,
+                        exit_time=datetime.now(UTC),
+                        pnl=pnl,
+                        commission=Decimal("0"),
+                        reason="sell_error",
+                    )
+                )
+                self._telegram.send_position_closed(
+                    symbol,
+                    float(position.entry_price),
+                    float(price),
+                    float(pnl),
+                    float(pnl / (position.entry_price * position.amount) * 100)
+                    if position.entry_price * position.amount > 0 else 0.0,
+                )
                 return
             fill_price = order.price if order.price > 0 else price
             commission = fill_price * position.amount * self._PAPER_COMMISSION_RATE

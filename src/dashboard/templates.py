@@ -261,20 +261,21 @@ function renderStrategy(s) {{
   const adxThr = p.adx_threshold || 25;
   const mw = p.macd_window || 3;
 
+  const prox = p.ema_proximity_pct || 1.5;
   const buyCriteria = [
     [`EMA${{emaF}} &gt; EMA${{emaS}}`, '상승 정렬 (골든크로스 포함)'],
+    [`가격 ≤ EMA${{emaF}} + ${{prox}}%`, '풀백 진입 — 눌림목만 허용'],
     [`MACD histogram`, `음→양 전환 (${{mw}}봉 이내)`],
     [`RSI ${{rsiMin}} ~ ${{ob}}`, '모멘텀 확인, 과매수 미도달'],
     [`거래량 ≥ 평균 × ${{vm}}배`, '유동성 필터'],
     [`ADX ≥ ${{adxThr}}`, '추세 강도 확인 (횡보 차단)'],
   ];
   const sellCriteria = [
-    [`EMA${{emaF}} &lt; EMA${{emaS}}`, '데스크로스'],
-    [`RSI ≥ ${{ob}}`, '과매수 익절'],
+    [`EMA${{emaF}} &lt; EMA${{emaS}}`, '데스크로스 (추세 역전)'],
     ['MACD histogram', '양 → 음 전환, EMA 위에서'],
   ];
-  const buyPillLabels  = ['EMA','MACD','RSI','VOL','ADX'];
-  const sellPillLabels = ['데스크로스','과매수','MACD↓'];
+  const buyPillLabels  = ['EMA','PROX','MACD','RSI','VOL','ADX'];
+  const sellPillLabels = ['데스크로스','MACD↓'];
 
   const mkBuyCriteriaRows = arr => arr.map(([cond, desc], i) =>
     `<div class="criteria-row">
@@ -294,11 +295,11 @@ function renderStrategy(s) {{
     <div style="margin-bottom:.75rem;display:flex;flex-wrap:wrap">${{pills}}</div>
     <div class="criteria-grid">
       <div class="criteria-col">
-        <h3 class="buy">▲ 매수 조건 (AND 5개)</h3>
+        <h3 class="buy">▲ 매수 조건 (AND 6개)</h3>
         ${{mkBuyCriteriaRows(buyCriteria)}}
       </div>
       <div class="criteria-col">
-        <h3 class="sell">▼ 매도 조건 (OR 3개)</h3>
+        <h3 class="sell">▼ 매도 조건 (OR 2개)</h3>
         ${{mkSellCriteriaRows(sellCriteria)}}
       </div>
     </div>`;
