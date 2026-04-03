@@ -139,20 +139,19 @@ class DashboardState:
         return eng.journal.stats()  # noqa: SLF001
 
     def get_equity_curve(self) -> list[dict]:
-        """Return cumulative PnL data points for charting."""
+        """Return daily PnL data points for charting (one entry per day)."""
         eng = self.engine
         if eng is None:
             return []
         trades = eng.journal.trades  # noqa: SLF001
-        curve = []
-        cumulative = 0.0
+        daily: dict[str, float] = {}
         for t in trades:
-            cumulative += float(t.pnl)
-            curve.append({
-                "time": t.exit_time.isoformat(),
-                "pnl": round(cumulative, 4),
-            })
-        return curve
+            date = t.exit_time.strftime("%Y-%m-%d")
+            daily[date] = daily.get(date, 0.0) + float(t.pnl)
+        return [
+            {"time": date, "pnl": round(pnl, 4)}
+            for date, pnl in sorted(daily.items())
+        ]
 
     def get_strategy_info(self) -> dict:
         """Return strategy name, parameters, and signal criteria for the dashboard."""

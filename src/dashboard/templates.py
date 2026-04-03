@@ -599,81 +599,73 @@ function renderEquity(pts) {{
   const wrap = document.getElementById('chart-wrap');
   if (!pts || pts.length === 0) {{ wrap.innerHTML = '<p class="empty">거래 없음 — 첫 청산 후 표시됩니다</p>'; return; }}
 
-  // ── 이번 달 1일~오늘 날짜 배열 생성 ────────────────────────────────
   const today = new Date();
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth() + 1).padStart(2, '0');
   const prefix = `${{yyyy}}-${{mm}}`;
   const todayStr = today.toISOString().substring(0, 10);
 
-  // 이번 달 거래 데이터만 필터링: 날짜별 마지막 누적 손익
+  // 이번 달 날짜별 일일 손익 (API가 이미 일별 합산해서 줌)
   const byDate = {{}};
   pts.forEach(p => {{
     const date = p.time ? p.time.substring(0, 10) : '';
     if (date.startsWith(prefix)) byDate[date] = p.pnl || 0;
   }});
 
-  // 1일~말일 전체 날짜 배열 생성 (carry-forward, 미래는 직전값 유지)
+  // 1일~말일 전체 날짜 배열 (거래 없는 날은 0)
   const lastDay = new Date(yyyy, today.getMonth() + 1, 0).getDate();
   const allDates = [];
   for (let d = 1; d <= lastDay; d++) {{
     allDates.push(`${{prefix}}-${{String(d).padStart(2, '0')}}`);
   }}
 
-  // 거래 없는 날은 직전 누적값 유지
-  let carry = 0;
-  const cumByDate = {{}};
-  allDates.forEach(date => {{
-    if (date in byDate) carry = byDate[date];
-    cumByDate[date] = carry;
-  }});
+  const dailyByDate = {{}};
+  allDates.forEach(date => {{ dailyByDate[date] = byDate[date] || 0; }});
 
-  const maxAbs = Math.max(...allDates.map(d => Math.abs(cumByDate[d])), 1);
+  const maxVal = Math.max(...allDates.map(d => dailyByDate[d]), 0);
+  const minVal = Math.min(...allDates.map(d => dailyByDate[d]), 0);
+  const maxAbs = Math.max(Math.abs(maxVal), Math.abs(minVal), 1);
+  const range = Math.max(maxVal - minVal, 1);
+
   const W = 1000, H = 180, padL = 58, padR = 14, padT = 28, padB = 28;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
   const n = allDates.length;
   const barW = Math.max(6, chartW / n - 3);
-
-  // 0원 기준선 위치: 최대/최소 비율로 계산
-  const maxVal = Math.max(...allDates.map(d => cumByDate[d]), 0);
-  const minVal = Math.min(...allDates.map(d => cumByDate[d]), 0);
-  const range = Math.max(maxVal - minVal, 1);
   const zeroY = padT + chartH * maxVal / range;
 
   let svgParts = [];
 
-  // 배경 눈금선 (3개)
+  // 배경 눈금선
   [-1, 0, 1].forEach(factor => {{
     const lineV = factor * maxAbs;
     const lineY = padT + chartH * (maxVal - lineV) / range;
     if (lineY >= padT && lineY <= padT + chartH) {{
-      const sign = lineV > 0 ? '+' : '';
       svgParts.push(`<line x1="${{padL}}" y1="${{lineY.toFixed(1)}}" x2="${{W-padR}}" y2="${{lineY.toFixed(1)}}" stroke="#1e293b" stroke-width="1" stroke-dasharray="${{factor===0?'4':'2'}}"/>`);
       const labelV = Math.round(Math.abs(lineV));
       if (labelV > 0) {{
-        svgParts.push(`<text x="${{padL-4}}" y="${{(lineY+3).toFixed(1)}}" fill="#475569" font-size="9" text-anchor="end">${{sign}}${{lineV >= 0 ? '' : '-'}}${{labelV.toLocaleString('ko-KR')}}</text>`);
+        const sign = lineV >= 0 ? '+' : '-';
+        svgParts.push(`<text x="${{padL-4}}" y="${{(lineY+3).toFixed(1)}}" fill="#475569" font-size="9" text-anchor="end">${{sign}}₩${{labelV.toLocaleString('ko-KR')}}</text>`);
       }}
     }}
   }});
 
   // 막대 + 날짜 레이블
   allDates.forEach((date, i) => {{
-    const v = cumByDate[date];
+    const v = dailyByDate[date];
     const x = padL + (i + 0.5) * chartW / n - barW / 2;
     const color = v >= 0 ? '#10b981' : '#ef4444';
-    const barH = Math.max(1, Math.abs(v) / range * chartH);
+    const barH = v !== 0 ? Math.max(1, Math.abs(v) / range * chartH) : 1;
+    const barColor = v !== 0 ? color : '#1e293b';
     const y = v >= 0 ? zeroY - barH : zeroY;
-    svgParts.push(`<rect x="${{x.toFixed(1)}}" y="${{y.toFixed(1)}}" width="${{barW.toFixed(1)}}" height="${{barH.toFixed(1)}}" fill="${{color}}" rx="1" opacity="0.85"/>`);
+    svgParts.push(`<rect x="${{x.toFixed(1)}}" y="${{y.toFixed(1)}}" width="${{barW.toFixed(1)}}" height="${{barH.toFixed(1)}}" fill="${{barColor}}" rx="1" opacity="0.85"/>`);
 
-    // 막대 위 값 표시 (막대가 충분히 클 때만)
-    if (barH > 14) {{
+    if (barH > 14 && v !== 0) {{
       const sign = v >= 0 ? '+' : '';
       const labelY = v >= 0 ? y - 3 : y + barH + 10;
-      svgParts.push(`<text x="${{(x+barW/2).toFixed(1)}}" y="${{labelY.toFixed(1)}}" fill="${{color}}" font-size="8" text-anchor="middle" font-weight="600">${{sign}}${{Math.round(v).toLocaleString('ko-KR')}}</text>`);
+      svgParts.push(`<text x="${{(x+barW/2).toFixed(1)}}" y="${{labelY.toFixed(1)}}" fill="${{color}}" font-size="8" text-anchor="middle" font-weight="600">${{sign}}₩${{Math.round(v).toLocaleString('ko-KR')}}</text>`);
     }}
 
-    // 날짜 레이블: 1일, 5일 단위
     const day = parseInt(date.substring(8));
     if (day === 1 || day % 5 === 0 || date === todayStr) {{
       const labelColor = date === todayStr ? '#f8fafc' : '#64748b';
@@ -681,12 +673,12 @@ function renderEquity(pts) {{
     }}
   }});
 
-  // 월 제목 + 누적 합계
-  const totalPnl = cumByDate[todayStr] || 0;
+  // 월 제목 + 월 합계 (오늘까지의 일별 손익 합산)
+  const totalPnl = allDates.filter(d => d <= todayStr).reduce((s, d) => s + dailyByDate[d], 0);
   const totalSign = totalPnl >= 0 ? '+' : '';
   const totalColor = totalPnl >= 0 ? '#10b981' : '#ef4444';
-  svgParts.push(`<text x="${{padL}}" y="16" fill="#94a3b8" font-size="10">${{yyyy}}년 ${{parseInt(mm)}}월 누적 손익</text>`);
-  svgParts.push(`<text x="${{W-padR}}" y="16" fill="${{totalColor}}" font-size="11" text-anchor="end" font-weight="700">${{totalSign}}₩${{Math.round(totalPnl).toLocaleString('ko-KR')}}</text>`);
+  svgParts.push(`<text x="${{padL}}" y="18" fill="#94a3b8" font-size="10">${{yyyy}}년 ${{parseInt(mm)}}월 일별 손익</text>`);
+  svgParts.push(`<text x="${{W-padR}}" y="20" fill="${{totalColor}}" font-size="15" text-anchor="end" font-weight="700">${{totalSign}}₩${{Math.round(totalPnl).toLocaleString('ko-KR')}}</text>`);
 
   wrap.innerHTML = `<svg viewBox="0 0 ${{W}} ${{H}}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto">${{svgParts.join('')}}</svg>`;
 }}
@@ -768,7 +760,7 @@ def _render_stats(stats: dict) -> str:
 
 
 def _render_equity_svg(equity: list[dict]) -> str:
-    """Render current-month cumulative P&L bar chart as inline SVG."""
+    """Render current-month daily P&L bar chart as inline SVG."""
     import calendar as _cal
     from datetime import date as _date, timedelta
 
@@ -780,14 +772,14 @@ def _render_equity_svg(equity: list[dict]) -> str:
     last_day = _cal.monthrange(today.year, today.month)[1]
     month_end = today.replace(day=last_day)
 
-    # 이번 달 날짜별 마지막 누적 손익
+    # 이번 달 날짜별 일일 손익 (equity는 이미 일별로 집계된 데이터)
     by_date: dict[str, float] = {}
     for pt in equity:
         d = pt.get("time", "")[:10]
         if d.startswith(prefix):
             by_date[d] = float(pt.get("pnl", 0.0))
 
-    # 1일~말일 전체 날짜 carry-forward (미래 날짜는 직전값 유지)
+    # 1일~말일 전체 날짜 (거래 없는 날은 0)
     all_dates: list[str] = []
     cur = today.replace(day=1)
     while cur <= month_end:
@@ -797,14 +789,9 @@ def _render_equity_svg(equity: list[dict]) -> str:
     if not all_dates:
         return '<p class="empty">거래 없음</p>'
 
-    carry = 0.0
-    cum: dict[str, float] = {}
-    for d in all_dates:
-        if d in by_date:
-            carry = by_date[d]
-        cum[d] = carry
+    daily: dict[str, float] = {d: by_date.get(d, 0.0) for d in all_dates}
 
-    values = [cum[d] for d in all_dates]
+    values = [daily[d] for d in all_dates]
     max_val = max(max(values), 0.0)
     min_val = min(min(values), 0.0)
     v_range = max(max_val - min_val, 1.0)
@@ -840,17 +827,18 @@ def _render_equity_svg(equity: list[dict]) -> str:
     # 막대 + 날짜 레이블
     today_str = today.strftime("%Y-%m-%d")
     for i, d in enumerate(all_dates):
-        v = cum[d]
+        v = daily[d]
         x = pad_l + (i + 0.5) * chart_w / n - bar_w / 2
         color = "#10b981" if v >= 0 else "#ef4444"
-        bh = max(1.0, abs(v) / v_range * chart_h)
+        bh = max(1.0, abs(v) / v_range * chart_h) if v != 0 else 1.0
+        bar_color = color if v != 0 else "#1e293b"
         y = zero_y - bh if v >= 0 else zero_y
         parts.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
-            f'fill="{color}" rx="1" opacity="0.85"/>'
+            f'fill="{bar_color}" rx="1" opacity="0.85"/>'
         )
         # 막대 값 레이블 (막대가 충분히 클 때)
-        if bh > 14:
+        if bh > 14 and v != 0:
             sign = "+" if v >= 0 else ""
             label_y = y - 3 if v >= 0 else y + bh + 10
             parts.append(
@@ -866,16 +854,16 @@ def _render_equity_svg(equity: list[dict]) -> str:
                 f'font-size="9" text-anchor="middle">{day_num}일</text>'
             )
 
-    # 월 제목 + 누적 합계
-    total = cum.get(today_str, 0.0)
+    # 월 제목 + 월 누적 합계 (일일 손익 합산)
+    total = sum(daily.get(d, 0.0) for d in all_dates if d <= today_str)
     total_color = "#10b981" if total >= 0 else "#ef4444"
     sign = "+" if total >= 0 else ""
     year, mon = today.year, today.month
     parts.append(
-        f'<text x="{pad_l}" y="16" fill="#94a3b8" font-size="10">{year}년 {mon}월 누적 손익</text>'
+        f'<text x="{pad_l}" y="18" fill="#94a3b8" font-size="10">{year}년 {mon}월 일별 손익</text>'
     )
     parts.append(
-        f'<text x="{W - pad_r}" y="16" fill="{total_color}" font-size="11" '
+        f'<text x="{W - pad_r}" y="20" fill="{total_color}" font-size="15" '
         f'text-anchor="end" font-weight="700">{sign}₩{round(total):,}</text>'
     )
     parts.append("</svg>")
