@@ -80,16 +80,28 @@ class SQLiteJournalStore:
                 CREATE INDEX IF NOT EXISTS idx_trades_exit_time
                 ON trades (exit_time)
             """)
+            # Unique constraint: prevents duplicate records for the same trade.
+            # Uses IF NOT EXISTS so existing DBs without the index are upgraded safely.
+            # Will silently skip creation if duplicate rows already exist (log warning).
+            try:
+                conn.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_unique
+                    ON trades (symbol, exit_time)
+                """)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    f"Could not create unique index on trades (existing duplicates?): {exc}"
+                )
         logger.debug("SQLiteJournalStore initialized", db=str(self._db_path))
 
     # ── Write ─────────────────────────────────────────────────────────────────
 
     def save(self, trade: TradeRecord) -> None:
-        """Persist a TradeRecord. Returns without error on duplicate."""
+        """Persist a TradeRecord. Silently ignores duplicate (symbol, exit_time)."""
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO trades
+                INSERT OR IGNORE INTO trades
                     (symbol, side, amount, entry_price, exit_price,
                      entry_time, exit_time, pnl, commission, reason)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

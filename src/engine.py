@@ -177,7 +177,7 @@ class TradingEngine:
                 if krw is not None:
                     self._portfolio.sync_cash(Decimal(str(krw.free)))
             except Exception as exc:  # noqa: BLE001
-                logger.warning("KRW balance sync failed", error=str(exc))
+                logger.warning(f"KRW balance sync failed: {exc}")
 
         try:
             with self._circuit_breaker:
@@ -416,8 +416,8 @@ class TradingEngine:
         for _cb in self._tick_callbacks:
             try:
                 _cb(tick_data)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Tick callback error (non-fatal): {exc}")
 
         if not signal_.is_actionable():
             return
@@ -768,7 +768,7 @@ class TradingEngine:
                     # Apply same SL/TP as normal opens so reconciled positions auto-close
                     recon_sl = entry_price * (Decimal("1") - Decimal(str(self._settings.max_position_risk)))
                     recon_sl_dist = entry_price - recon_sl
-                    recon_tp_dist = max(recon_sl_dist * Decimal("3"), entry_price * Decimal("0.15"))
+                    recon_tp_dist = max(recon_sl_dist * Decimal("2"), entry_price * Decimal("0.015"))
                     recon_tp = entry_price + recon_tp_dist
                     self._portfolio.open_position(
                         symbol=sym,

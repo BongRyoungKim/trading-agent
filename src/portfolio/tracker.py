@@ -176,10 +176,17 @@ class PortfolioTracker:
                 f"No open position for {symbol}",
                 details={"symbol": symbol},
             )
-        updated = replace(self._positions[symbol], stop_loss=new_stop)
+        old_position = self._positions[symbol]
+        updated = replace(old_position, stop_loss=new_stop)
         self._positions[symbol] = updated
         if self._store is not None:
-            self._store.save(updated)
+            try:
+                self._store.save(updated)
+            except Exception as exc:
+                # Rollback in-memory change so state stays consistent with DB
+                self._positions[symbol] = old_position
+                logger.error(f"Stop-loss update failed to persist — rolled back in memory: {exc}", symbol=symbol)
+                raise
         logger.debug(
             "Trailing stop updated",
             symbol=symbol,

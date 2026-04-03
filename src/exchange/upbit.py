@@ -70,7 +70,8 @@ class UpbitClient(BaseExchangeClient):
         try:
             order_type = "market" if price is None else "limit"
             if order_type == "market" and side == "buy":
-                # Upbit market buy: send KRW cost directly
+                # Upbit market buy requires KRW cost, not base-currency amount.
+                # ccxt Upbit reads the 'cost' param and ignores 'amount' for market buys.
                 ticker = self._exchange.fetch_ticker(symbol)
                 current_price = float(ticker["last"])
                 krw_cost = float(amount) * current_price
@@ -78,7 +79,7 @@ class UpbitClient(BaseExchangeClient):
                     symbol=symbol,
                     type=order_type,
                     side=side,
-                    amount=krw_cost,
+                    amount=None,
                     price=None,
                     params={"cost": krw_cost},
                 )
