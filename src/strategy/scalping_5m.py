@@ -209,6 +209,7 @@ class Scalping5mStrategy(BaseStrategy):
             "atr": round(atr_val, 4),
             "adx": round(adx_now, 2),
             "vol_ratio": round(vol_now / vol_avg, 2) if vol_avg > 0 else None,
+            "vol_krw": round(vol_now * current_price) if vol_avg > 0 else None,
             "cond": {
                 "above_ema":        above_ema,
                 "macd_just_pos":    macd_recently_crossed,

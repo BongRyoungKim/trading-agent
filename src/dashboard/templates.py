@@ -203,6 +203,16 @@ function switchTab(name, btn) {{
 }}
 let _strategyParams = {{}};
 let _positionsMap = {{}};  // symbol → position (entry_price, amount)
+let _activeTickTab = 0;
+function switchTickTab(idx) {{
+  _activeTickTab = idx;
+  [0,1,2].forEach(i => {{
+    const p = document.getElementById('tick-panel-'+i);
+    const b = document.getElementById('tick-tab-'+i);
+    if (p) p.style.display = i===idx ? '' : 'none';
+    if (b) {{ b.classList.toggle('active', i===idx); }}
+  }});
+}}
 async function refresh() {{
   try {{
     const [s, pos, pnl, trades, stats, eq, bal, ticks, strat] = await Promise.all([
@@ -439,8 +449,8 @@ function _initTickStream() {{
 }}
 function _renderTicksFromMap(updatedSymbol, prevTick) {{
   const items = Object.values(_ticksMap).sort((a, b) => {{
-    const va = (a.metadata && a.metadata.vol_ratio) || 0;
-    const vb = (b.metadata && b.metadata.vol_ratio) || 0;
+    const va = (a.metadata && a.metadata.vol_krw) || 0;
+    const vb = (b.metadata && b.metadata.vol_krw) || 0;
     return vb - va;
   }});
   renderTicks(items, updatedSymbol, prevTick);
@@ -456,12 +466,17 @@ function renderTicks(items, flashSymbol, prevTick) {{
       return '₩' + Math.round(v).toLocaleString('ko-KR');
     return '₩' + v.toLocaleString('ko-KR', {{maximumFractionDigits:2}});
   }};
-  const p = _strategyParams;
-  // Colored pill condition badge helpers — buy unified green, sell unified red
-  const buyPill  = (label, ok, title)  => `<span class="cp ${{ok ? 'cp-buy' : 'cp-dim'}}" title="${{title}}">${{label}}</span>`;
-  const sellPill = (label, on_, title) => `<span class="cp ${{on_ ? 'cp-sell' : 'cp-dim'}}" title="${{title}}">${{label}}</span>`;
+  const fmtKRW = v => v != null ? '₩' + Math.round(v).toLocaleString('ko-KR') : '-';
 
-  const rows = items.map(t => {{
+  const thead = `<table class="ticks-table"><thead><tr>
+    <th>종목</th><th>신호</th><th>현재가</th>
+    <th title="거래금액 (KRW)">거래금액</th>
+    <th title="RSI">RSI</th>
+    <th title="MACD histogram">MACD</th>
+    <th>시각</th>
+  </tr></thead><tbody>`;
+
+  const mkRows = (group) => group.map(t => {{
     const m = t.metadata || {{}};
     const c = m.cond || {{}};
     const rsi = m.rsi != null ? m.rsi.toFixed(1) : '-';
@@ -469,45 +484,37 @@ function renderTicks(items, flashSymbol, prevTick) {{
     const macdVal = m.macd_hist != null ? (m.macd_hist>=0?'+':'')+m.macd_hist.toFixed(4) : '-';
     const macdColor = m.macd_hist > 0 ? '#10b981' : m.macd_hist < 0 ? '#ef4444' : '#94a3b8';
     const price = fmtPrice(t.symbol, m.price);
-    const ts = t.timestamp ? t.timestamp.substring(11,19) : '';
+    const volKrw = fmtKRW(m.vol_krw);
+    const ts = t.timestamp ? t.timestamp.substring(11,16) : '';
     const ac = actionColor(t.action);
     const actionChanged = flashSymbol === t.symbol && prevTick && prevTick.action !== t.action;
     const flash = flashSymbol === t.symbol ? ' tick-flash' : '';
     const actionDot = actionChanged ? `<span style="font-size:.65rem;color:#f59e0b;margin-left:.3rem">▲</span>` : '';
-    const volRatio = m.vol_ratio != null ? m.vol_ratio.toFixed(2)+'x' : '-';
-    const emaDiff = (m.ema_fast != null && m.ema_slow != null)
-      ? (m.ema_fast - m.ema_slow >= 0 ? '+' : '') + (m.ema_fast - m.ema_slow).toFixed(2)
-      : '-';
-    const emaDiffColor = c.above_ema ? '#10b981' : '#ef4444';
-
-    const hasCond = Object.keys(c).length > 0;
-    const condCell = !hasCond ? '<td>-</td>' : `<td style="white-space:nowrap">
-      ${{buyPill('E',c.above_ema,'EMA 상승 정렬')}}${{buyPill('M',c.macd_just_pos,'MACD 양전환')}}${{buyPill('R',c.rsi_ok,'RSI 범위 내')}}${{buyPill('V',c.vol_ok,'거래량 충분')}}${{buyPill('A',c.adx_ok,'ADX 추세 강도 ≥25')}}
-      <span style="margin:0 3px;color:#334155;font-size:.7rem">│</span>
-      ${{sellPill('D',c.death_cross,'데스크로스')}}${{sellPill('O',c.overbought,'과매수')}}${{sellPill('M',c.macd_turned_neg,'MACD 음전환')}}
-    </td>`;
-
     return `<tr class="${{flash}}" id="tick-row-${{t.symbol.replace('/','_')}}">
       <td><code>${{t.symbol}}</code></td>
       <td><span class="badge" style="background:${{ac}}22;color:${{ac}}">${{t.action}}</span>${{actionDot}}</td>
       <td style="font-weight:600">${{price}}</td>
-      <td style="color:${{emaDiffColor}};font-size:.8rem">${{emaDiff}}</td>
-      <td style="color:${{macdColor}};font-size:.8rem">${{macdVal}}</td>
-      <td style="color:${{rsiColor}};font-size:.8rem">${{rsi}}</td>
-      <td style="color:#94a3b8;font-size:.8rem">${{volRatio}}</td>
-      ${{condCell}}
+      <td style="color:#94a3b8;font-size:.78rem">${{volKrw}}</td>
+      <td style="color:${{rsiColor}};font-size:.78rem">${{rsi}}</td>
+      <td style="color:${{macdColor}};font-size:.78rem">${{macdVal}}</td>
       <td style="color:#475569;font-size:.75rem">${{ts}}</td>
     </tr>`;
-  }});
-  el.innerHTML = `<table class="ticks-table"><thead><tr>
-    <th>종목</th><th>신호</th><th>현재가</th>
-    <th title="EMA Fast - EMA Slow">EMA차이</th>
-    <th title="MACD histogram">MACD Hist</th>
-    <th title="RSI">RSI</th>
-    <th title="거래량배율 (20봉 평균 대비)">거래량</th>
-    <th title="매수: E(EMA) M(MACD) R(RSI) V(VOL) │ 매도: D(데스크로스) O(과매수) M(MACD↓)">조건</th>
-    <th>시각</th>
-  </tr></thead><tbody>${{rows.join('')}}</tbody></table>`;
+  }}).join('');
+
+  const groups = [items.slice(0,10), items.slice(10,20), items.slice(20,30)];
+  const labels = ['1-10위', '11-20위', '21-30위'];
+  const tabBtns = labels.map((lbl, i) =>
+    `<button class="tab${{_activeTickTab===i?' active':''}}" id="tick-tab-${{i}}" onclick="switchTickTab(${{i}})">${{lbl}}</button>`
+  ).join('');
+  const panels = groups.map((grp, i) =>
+    `<div id="tick-panel-${{i}}" class="tick-panel"${{_activeTickTab===i?'':' style="display:none"'}}>${{
+      grp.length ? thead + mkRows(grp) + '</tbody></table>' : '<p class="empty">데이터 없음</p>'
+    }}</div>`
+  ).join('');
+
+  el.innerHTML =
+    `<div style="display:flex;gap:.5rem;margin-bottom:.75rem;border-bottom:1px solid #334155;padding-bottom:.5rem">${{tabBtns}}</div>`
+    + panels;
 }}
 function renderBalance(items) {{
   const el = document.getElementById('balance-body');
@@ -907,41 +914,59 @@ def _render_ticks(ticks: list[dict]) -> str:
     action_color = {"BUY": "#10b981", "SELL": "#ef4444", "HOLD": "#64748b"}
     ticks = sorted(
         ticks,
-        key=lambda x: (x.get("metadata") or {}).get("vol_ratio") or 0,
+        key=lambda x: (x.get("metadata") or {}).get("vol_krw") or 0,
         reverse=True,
     )
-    rows = []
-    for t in ticks:
+    thead = (
+        '<table class="ticks-table"><thead><tr>'
+        "<th>종목</th><th>신호</th><th>현재가</th><th>거래금액</th><th>RSI</th><th>MACD</th><th>시각</th>"
+        "</tr></thead><tbody>"
+    )
+
+    def _row(t: dict) -> str:
         action = t.get("action", "HOLD")
         color = action_color.get(action, "#64748b")
         meta = t.get("metadata") or {}
         price = meta.get("price")
         sym = t["symbol"]
-        if price is not None:
-            if any(k in sym for k in ("BTC", "ETH", "SOL", "TAO")):
-                price_str = f"₩{price:,.0f}"
-            else:
-                price_str = f"₩{price:,.2f}"
-        else:
-            price_str = "-"
+        price_str = (
+            f"₩{price:,.0f}" if price is not None and any(k in sym for k in ("BTC", "ETH", "SOL", "TAO"))
+            else f"₩{price:,.2f}" if price is not None
+            else "-"
+        )
         rsi = f"{meta['rsi']:.1f}" if "rsi" in meta else "-"
         macd_h = meta.get("macd_hist")
         macd_str = f"{macd_h:+.4f}" if macd_h is not None else "-"
+        vol_krw = meta.get("vol_krw")
+        vol_str = f"₩{vol_krw:,.0f}" if vol_krw else "-"
         ts = (t.get("timestamp") or "")[-8:-3]
-        rows.append(
+        return (
             f"<tr>"
             f"<td><code>{sym}</code></td>"
             f"<td><span class='badge' style='background:{color}22;color:{color}'>{action}</span></td>"
             f"<td style='font-weight:600'>{price_str}</td>"
-            f"<td style='color:#94a3b8;font-size:.78rem'>RSI {rsi}</td>"
-            f"<td style='color:#94a3b8;font-size:.78rem'>MACD {macd_str}</td>"
+            f"<td style='color:#94a3b8;font-size:.78rem'>{vol_str}</td>"
+            f"<td style='color:#94a3b8;font-size:.78rem'>{rsi}</td>"
+            f"<td style='color:#94a3b8;font-size:.78rem'>{macd_str}</td>"
             f"<td style='color:#475569;font-size:.72rem'>{ts}</td>"
             f"</tr>"
         )
+
+    groups = [ticks[0:10], ticks[10:20], ticks[20:30]]
+    labels = ["1-10위", "11-20위", "21-30위"]
+    tab_btns = "".join(
+        f'<button class="tab{" active" if i == 0 else ""}" id="tick-tab-{i}" '
+        f'onclick="switchTickTab({i})">{lbl}</button>'
+        for i, lbl in enumerate(labels)
+    )
+    panels = "".join(
+        f'<div id="tick-panel-{i}" class="tick-panel"'
+        f'{" " if i == 0 else " style=\"display:none\""}>{"".join([thead] + [_row(t) for t in grp] + ["</tbody></table>"]) if grp else "<p class=\"empty\">데이터 없음</p>"}</div>'
+        for i, grp in enumerate(groups)
+    )
     return (
-        '<table class="ticks-table"><thead><tr>'
-        "<th>종목</th><th>신호</th><th>현재가</th><th>RSI</th><th>MACD Hist</th><th>시각</th>"
-        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+        f'<div style="display:flex;gap:.5rem;margin-bottom:.75rem;border-bottom:1px solid #334155;padding-bottom:.5rem">{tab_btns}</div>'
+        + panels
     )
 
 

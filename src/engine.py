@@ -712,7 +712,7 @@ class TradingEngine:
         scheduler to track them. Dropped symbols with open positions are kept.
         """
         try:
-            new_top: list[str] = self._exchange.get_top_symbols_by_volume(10)  # type: ignore[attr-defined]
+            new_top: list[str] = self._exchange.get_top_symbols_by_volume(30)  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Symbol refresh failed: {exc}")
             return
