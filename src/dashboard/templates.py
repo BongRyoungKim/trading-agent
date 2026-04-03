@@ -37,7 +37,7 @@ def render_dashboard(
     equity_svg = _render_equity_svg(equity)
     stats_html = _render_stats(stats)
     positions_html = _render_positions(positions)
-    buy_html = _render_buy_history(trades)
+    buy_html = _render_buy_history(trades, positions)
     sell_html = _render_sell_history(trades)
     pnl_html = _render_pnl(pnl)
     balance_html = _render_balance(balance)
@@ -237,10 +237,12 @@ async function refresh() {{
     renderBalance(bal);
     renderStrategy(strat);
     renderTicks(ticks);
+    renderPositions(pos);
     renderBuyHistory(trades);
     renderSellHistory(trades);
     // Update main tab counts (scope to .tabs bar, not tick tabs)
     const mainTabs = document.querySelectorAll('.tabs .tab');
+    if (mainTabs[0]) mainTabs[0].textContent = `오픈 포지션 (${{(pos||[]).length}})`;
     if (mainTabs[1]) mainTabs[1].textContent = `매수 이력 (${{trades.length}})`;
     if (mainTabs[2]) mainTabs[2].textContent = `매도 이력 (${{trades.length}})`;
   }} catch(e) {{ console.warn('Refresh failed', e); }}
@@ -441,6 +443,10 @@ function _initTickStream() {{
       _renderTicksFromMap(tick.symbol, prev);
       const el = document.getElementById('tick-last-time');
       if (el) el.textContent = '최근: ' + new Date().toLocaleTimeString('ko-KR');
+      // BUY/SELL 신호 감지 시 포지션·거래 이력 즉시 갱신
+      if (tick.action === 'BUY' || tick.action === 'SELL') {{
+        refreshPositionsTrades();
+      }}
     }} catch(_) {{}}
   }};
   es.onerror = function() {{
@@ -576,25 +582,92 @@ function renderBalance(items) {{
       <span class="stat-value" style="color:#10b981;font-weight:700">${{fmtKRW(total)}}</span>
     </div>`;
 }}
+function renderPositions(positions) {{
+  const el = document.getElementById('tab-positions');
+  if (!el) return;
+  if (!positions || positions.length === 0) {{
+    el.innerHTML = '<p class="empty">오픈 포지션 없음</p>';
+    return;
+  }}
+  const fmtKRW = v => v != null ? '₩' + Math.round(v).toLocaleString('ko-KR') : '—';
+  const rows = positions.map(p => {{
+    const sl = p.stop_loss != null ? fmtKRW(p.stop_loss) : '—';
+    const tp = p.take_profit != null ? fmtKRW(p.take_profit) : '—';
+    const dt = p.entry_time ? p.entry_time.substring(0,16).replace('T',' ') : '-';
+    return `<tr>
+      <td><code>${{p.symbol}}</code></td>
+      <td>${{(p.side||'').toUpperCase()}}</td>
+      <td style="color:#94a3b8">${{p.amount != null ? p.amount.toFixed(6) : '-'}}</td>
+      <td style="font-weight:600">${{fmtKRW(p.entry_price)}}</td>
+      <td style="color:#ef4444">${{sl}}</td>
+      <td style="color:#10b981">${{tp}}</td>
+      <td style="color:#64748b;font-size:.78rem">${{dt}}</td>
+    </tr>`;
+  }});
+  el.innerHTML = `<table><thead><tr>
+    <th>종목</th><th>방향</th><th>수량</th><th>진입가</th><th>손절가</th><th>목표가</th><th>진입 시각</th>
+  </tr></thead><tbody>${{rows.join('')}}</tbody></table>`;
+}}
+async function refreshPositionsTrades() {{
+  try {{
+    const [pos, trades, pnl] = await Promise.all([
+      fetch('/api/positions').then(r=>r.json()),
+      fetch('/api/trades').then(r=>r.json()),
+      fetch('/api/pnl').then(r=>r.json()),
+    ]);
+    _positionsMap = {{}};
+    (pos || []).forEach(p => {{ _positionsMap[p.symbol] = p; }});
+    renderPositions(pos);
+    renderBuyHistory(trades);
+    renderSellHistory(trades);
+    renderPnl(pnl);
+    const mainTabs = document.querySelectorAll('.tabs .tab');
+    if (mainTabs[0]) mainTabs[0].textContent = `오픈 포지션 (${{(pos||[]).length}})`;
+    if (mainTabs[1]) mainTabs[1].textContent = `매수 이력 (${{trades.length}})`;
+    if (mainTabs[2]) mainTabs[2].textContent = `매도 이력 (${{trades.length}})`;
+  }} catch(e) {{ /* silent */ }}
+}}
 function renderBuyHistory(trades) {{
   const el = document.getElementById('tab-buys');
   if (!el) return;
-  if (!trades || trades.length === 0) {{ el.innerHTML = '<p class="empty">매수 이력 없음</p>'; return; }}
   const fmtKRW = v => '₩' + Math.round(v).toLocaleString('ko-KR');
-  const rows = trades.map(t => {{
+
+  // Open positions (bought, not yet sold)
+  const openRows = Object.values(_positionsMap)
+    .filter(p => p.side === 'buy')
+    .sort((a, b) => (b.entry_time || '').localeCompare(a.entry_time || ''))
+    .map(p => {{
+      const dt = p.entry_time ? p.entry_time.substring(0,16).replace('T',' ') : '-';
+      const cost = p.entry_price * p.amount;
+      return `<tr>
+        <td style="color:#64748b;font-size:.78rem">${{dt}}</td>
+        <td><code>${{p.symbol}}</code></td>
+        <td style="color:#94a3b8">${{p.amount != null ? p.amount.toFixed(6) : '-'}}</td>
+        <td style="font-weight:600;color:#10b981">${{fmtKRW(p.entry_price)}}</td>
+        <td style="color:#94a3b8">${{fmtKRW(cost)}}</td>
+        <td><span style="background:#10b98120;color:#10b981;padding:.1rem .4rem;border-radius:9999px;font-size:.72rem;font-weight:700">보유중</span></td>
+      </tr>`;
+    }});
+
+  // Closed trades (entry info)
+  const closedRows = (trades || []).map(t => {{
     const dt = t.entry_time ? t.entry_time.substring(0,16).replace('T',' ') : '-';
     const cost = t.entry_price * t.amount;
     return `<tr>
       <td style="color:#64748b;font-size:.78rem">${{dt}}</td>
       <td><code>${{t.symbol}}</code></td>
-      <td style="color:#94a3b8">${{t.amount.toFixed ? t.amount.toFixed(6) : t.amount}}</td>
+      <td style="color:#94a3b8">${{t.amount != null && t.amount.toFixed ? t.amount.toFixed(6) : t.amount}}</td>
       <td style="font-weight:600;color:#10b981">${{fmtKRW(t.entry_price)}}</td>
       <td style="color:#94a3b8">${{fmtKRW(cost)}}</td>
+      <td><span style="color:#475569;font-size:.72rem">청산</span></td>
     </tr>`;
   }});
+
+  const allRows = [...openRows, ...closedRows];
+  if (allRows.length === 0) {{ el.innerHTML = '<p class="empty">매수 이력 없음</p>'; return; }}
   el.innerHTML = `<table><thead><tr>
-    <th>매수 시각</th><th>종목</th><th>수량</th><th>매수가</th><th>매수 금액</th>
-  </tr></thead><tbody>${{rows.join('')}}</tbody></table>`;
+    <th>매수 시각</th><th>종목</th><th>수량</th><th>매수가</th><th>매수 금액</th><th>상태</th>
+  </tr></thead><tbody>${{allRows.join('')}}</tbody></table>`;
 }}
 function renderSellHistory(trades) {{
   const el = document.getElementById('tab-sells');
@@ -721,6 +794,7 @@ function showToast(msg) {{
   setTimeout(()=>{{t.style.display='none'}}, 3000);
 }}
 setInterval(refresh, 30000);
+setInterval(refreshPositionsTrades, 5000);
 // Initialize on load
 (function() {{
   // Seed _ticksMap from server-rendered ticks data
@@ -903,6 +977,8 @@ def _render_positions(positions: list[dict]) -> str:
     for pos in positions:
         sl = f"{pos['stop_loss']:,.2f}" if pos.get("stop_loss") else "—"
         tp = f"{pos['take_profit']:,.2f}" if pos.get("take_profit") else "—"
+        entry_time = pos.get("entry_time", "")
+        dt = entry_time[:16].replace("T", " ") if entry_time else "-"
         rows.append(
             f"<tr>"
             f"<td><code>{pos['symbol']}</code></td>"
@@ -910,12 +986,13 @@ def _render_positions(positions: list[dict]) -> str:
             f"<td>{pos['amount']:.6f}</td>"
             f"<td>{pos['entry_price']:,.2f}</td>"
             f"<td>{sl}</td><td>{tp}</td>"
+            f"<td style='color:#64748b;font-size:.78rem'>{dt}</td>"
             f"</tr>"
         )
     return (
         "<table><thead><tr>"
         "<th>종목</th><th>방향</th><th>수량</th>"
-        "<th>진입가</th><th>손절가</th><th>목표가</th>"
+        "<th>진입가</th><th>손절가</th><th>목표가</th><th>진입 시각</th>"
         "</tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
@@ -1074,11 +1151,28 @@ def _render_balance(balance: list[dict]) -> str:
     return grid
 
 
-def _render_buy_history(trades: list[dict]) -> str:
-    if not trades:
-        return '<p class="empty">매수 이력 없음</p>'
+def _render_buy_history(trades: list[dict], positions: list[dict] | None = None) -> str:
     rows = []
-    for t in trades:
+    # Open positions first (보유중)
+    for pos in (positions or []):
+        if pos.get("side") != "buy":
+            continue
+        entry_time = pos.get("entry_time", "")
+        dt = entry_time[:16].replace("T", " ") if entry_time else "-"
+        cost = pos["entry_price"] * pos["amount"]
+        rows.append(
+            f"<tr>"
+            f"<td style='color:#64748b;font-size:.78rem'>{dt}</td>"
+            f"<td><code>{pos['symbol']}</code></td>"
+            f"<td style='color:#94a3b8'>{pos['amount']:.6f}</td>"
+            f"<td style='font-weight:600;color:#10b981'>₩{pos['entry_price']:,.0f}</td>"
+            f"<td style='color:#94a3b8'>₩{cost:,.0f}</td>"
+            f"<td><span style='background:#10b98120;color:#10b981;padding:.1rem .4rem;"
+            f"border-radius:9999px;font-size:.72rem;font-weight:700'>보유중</span></td>"
+            f"</tr>"
+        )
+    # Closed trades
+    for t in (trades or []):
         entry_dt = t["entry_time"][:16].replace("T", " ")
         cost = t["entry_price"] * t["amount"]
         rows.append(
@@ -1088,11 +1182,14 @@ def _render_buy_history(trades: list[dict]) -> str:
             f"<td style='color:#94a3b8'>{t['amount']:.6f}</td>"
             f"<td style='font-weight:600;color:#10b981'>₩{t['entry_price']:,.0f}</td>"
             f"<td style='color:#94a3b8'>₩{cost:,.0f}</td>"
+            f"<td style='color:#475569;font-size:.72rem'>청산</td>"
             f"</tr>"
         )
+    if not rows:
+        return '<p class="empty">매수 이력 없음</p>'
     return (
         "<table><thead><tr>"
-        "<th>매수 시각</th><th>종목</th><th>수량</th><th>매수가</th><th>매수 금액</th>"
+        "<th>매수 시각</th><th>종목</th><th>수량</th><th>매수가</th><th>매수 금액</th><th>상태</th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
     )
 

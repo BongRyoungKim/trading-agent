@@ -89,6 +89,7 @@ class DashboardState:
                 "side": pos.side,
                 "amount": float(pos.amount),
                 "entry_price": float(pos.entry_price),
+                "entry_time": pos.entry_time.isoformat(),
                 "stop_loss": float(pos.stop_loss) if pos.stop_loss is not None else None,
                 "take_profit": float(pos.take_profit) if pos.take_profit is not None else None,
             })
