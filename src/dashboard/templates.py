@@ -239,10 +239,10 @@ async function refresh() {{
     renderTicks(ticks);
     renderBuyHistory(trades);
     renderSellHistory(trades);
-    // Update tab counts
-    const tabs = document.querySelectorAll('.tab');
-    if (tabs[1]) tabs[1].textContent = `매수 이력 (${{trades.length}})`;
-    if (tabs[2]) tabs[2].textContent = `매도 이력 (${{trades.length}})`;
+    // Update main tab counts (scope to .tabs bar, not tick tabs)
+    const mainTabs = document.querySelectorAll('.tabs .tab');
+    if (mainTabs[1]) mainTabs[1].textContent = `매수 이력 (${{trades.length}})`;
+    if (mainTabs[2]) mainTabs[2].textContent = `매도 이력 (${{trades.length}})`;
   }} catch(e) {{ console.warn('Refresh failed', e); }}
 }}
 function renderStrategy(s) {{
