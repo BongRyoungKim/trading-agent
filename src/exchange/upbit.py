@@ -162,3 +162,24 @@ class UpbitClient(BaseExchangeClient):
             return Ticker.from_ccxt(raw)
         except Exception as exc:
             raise _map_ccxt_exception(exc, f"get_ticker:{symbol}") from exc
+
+    @retry(max_attempts=3, base_delay=2.0)
+    def get_top_symbols_by_volume(self, n: int = 10) -> list[str]:
+        """
+        Return top N active KRW-market symbols ranked by 24h quote volume.
+        Single fetch_tickers() call — low API cost.
+        """
+        try:
+            tickers = self._exchange.fetch_tickers()
+            ranked = sorted(
+                (
+                    (sym, float(data.get("quoteVolume") or 0))
+                    for sym, data in tickers.items()
+                    if sym.endswith("/KRW") and (data.get("quoteVolume") or 0) > 0
+                ),
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            return [sym for sym, _ in ranked[:n]]
+        except Exception as exc:
+            raise _map_ccxt_exception(exc, "get_top_symbols_by_volume") from exc

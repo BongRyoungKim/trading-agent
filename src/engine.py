@@ -91,6 +91,8 @@ class TradingEngine:
         self._latest_ticks: dict[str, dict] = {}  # symbol → latest tick result
         self._tick_callbacks: list = []  # called with tick dict after each evaluation
         self._sync_anchor: str = ""  # first symbol in the list — triggers KRW sync
+        self._tick_symbols: set[str] = set()  # currently scheduled tick symbols
+        self._tick_interval: int = 60  # stored at start() for dynamic symbol additions
         self._journal = (
             TradeJournal.from_store(journal_store)
             if journal_store is not None
@@ -225,6 +227,8 @@ class TradingEngine:
         """
         self._initial_capital = self._portfolio.cash
         self._start_time = time.monotonic()
+        self._tick_interval = interval_seconds
+        self._tick_symbols = set(symbols)
         self._sync_anchor = symbols[0] if symbols else ""
 
         logger.info(
@@ -262,6 +266,22 @@ class TradingEngine:
                 id=f"tick_{sym.replace('/', '_')}",
                 max_instances=1,
                 coalesce=True,
+            )
+
+        # Dynamic top-N symbol refresh (Upbit only)
+        if hasattr(self._exchange, "get_top_symbols_by_volume"):
+            self._scheduler.add_job(
+                self._refresh_symbols,
+                trigger="interval",
+                minutes=10,
+                id="symbol_refresh",
+            )
+            logger.info("Symbol auto-refresh scheduled (every 10 min)")
+            # Run once immediately after scheduler starts (deferred via first interval)
+            self._scheduler.add_job(
+                self._refresh_symbols,
+                trigger="date",
+                id="symbol_refresh_init",
             )
 
         if daily_report_hour is not None and self._telegram.is_enabled:
@@ -683,6 +703,65 @@ class TradingEngine:
             float(pnl),
             pnl_pct,
         )
+
+    # ── Internal: dynamic symbol refresh ─────────────────────────────────────
+
+    def _refresh_symbols(self) -> None:
+        """
+        Fetch top-N symbols by 24h volume from the exchange and update the
+        scheduler to track them. Dropped symbols with open positions are kept.
+        """
+        try:
+            new_top: list[str] = self._exchange.get_top_symbols_by_volume(10)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Symbol refresh failed: {exc}")
+            return
+
+        new_set = set(new_top)
+        added = new_set - self._tick_symbols
+        dropped = self._tick_symbols - new_set
+
+        # Remove dropped symbols — skip any with an open position
+        actually_removed: set[str] = set()
+        for sym in dropped:
+            if self._portfolio.has_position(sym):
+                logger.info("Symbol refresh: keeping dropped symbol (open position)", symbol=sym)
+                continue
+            job_id = f"tick_{sym.replace('/', '_')}"
+            try:
+                self._scheduler.remove_job(job_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._tick_symbols.discard(sym)
+            self._latest_ticks.pop(sym, None)
+            actually_removed.add(sym)
+
+        # Add new symbols
+        for sym in added:
+            job_id = f"tick_{sym.replace('/', '_')}"
+            self._scheduler.add_job(
+                self.tick,
+                trigger="interval",
+                seconds=self._tick_interval,
+                args=[sym],
+                id=job_id,
+                max_instances=1,
+                coalesce=True,
+                replace_existing=True,
+            )
+            self._tick_symbols.add(sym)
+
+        # Update sync anchor to highest-volume symbol
+        if new_top:
+            self._sync_anchor = new_top[0]
+
+        if added or actually_removed:
+            logger.info(
+                "Symbol list refreshed",
+                added=sorted(added),
+                removed=sorted(actually_removed),
+                active=sorted(self._tick_symbols),
+            )
 
     # ── Internal: daily report ────────────────────────────────────────────────
 
