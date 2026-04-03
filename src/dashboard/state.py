@@ -183,12 +183,16 @@ class DashboardState:
             return {}
 
     def get_ticks(self) -> list[dict]:
-        """Return latest tick evaluation result per symbol, sorted by symbol."""
+        """Return latest tick evaluation result per symbol, sorted by vol_ratio descending."""
         eng = self.engine
         if eng is None:
             return []
         ticks = getattr(eng, "_latest_ticks", {})
-        return sorted(ticks.values(), key=lambda x: x["symbol"])
+        return sorted(
+            ticks.values(),
+            key=lambda x: (x.get("metadata") or {}).get("vol_ratio") or 0,
+            reverse=True,
+        )
 
     def get_balance(self) -> list[dict]:
         """Return tradeable coin balances (non-KRW, free > 0, active KRW market)."""

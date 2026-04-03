@@ -438,7 +438,11 @@ function _initTickStream() {{
   }};
 }}
 function _renderTicksFromMap(updatedSymbol, prevTick) {{
-  const items = Object.values(_ticksMap).sort((a,b)=>a.symbol<b.symbol?-1:1);
+  const items = Object.values(_ticksMap).sort((a, b) => {{
+    const va = (a.metadata && a.metadata.vol_ratio) || 0;
+    const vb = (b.metadata && b.metadata.vol_ratio) || 0;
+    return vb - va;
+  }});
   renderTicks(items, updatedSymbol, prevTick);
 }}
 function renderTicks(items, flashSymbol, prevTick) {{
@@ -901,6 +905,11 @@ def _render_ticks(ticks: list[dict]) -> str:
     if not ticks:
         return '<p class="empty">아직 평가 없음 (첫 tick 대기 중)</p>'
     action_color = {"BUY": "#10b981", "SELL": "#ef4444", "HOLD": "#64748b"}
+    ticks = sorted(
+        ticks,
+        key=lambda x: (x.get("metadata") or {}).get("vol_ratio") or 0,
+        reverse=True,
+    )
     rows = []
     for t in ticks:
         action = t.get("action", "HOLD")
