@@ -468,12 +468,16 @@ function renderTicks(items, flashSymbol, prevTick) {{
   }};
   const fmtKRW = v => v != null ? '₩' + Math.round(v).toLocaleString('ko-KR') : '-';
 
+  const buyPill  = (lbl, ok, title) => `<span class="cp ${{ok?'cp-buy':'cp-dim'}}" title="${{title}}">${{lbl}}</span>`;
+  const sellPill = (lbl, on_, title) => `<span class="cp ${{on_?'cp-sell':'cp-dim'}}" title="${{title}}">${{lbl}}</span>`;
+
   const thead = `<table class="ticks-table"><thead><tr>
     <th style="width:2rem;text-align:center">#</th>
     <th>종목</th><th>신호</th><th>현재가</th>
     <th title="거래대금 (KRW)">거래대금</th>
     <th title="RSI">RSI</th>
     <th title="MACD histogram">MACD</th>
+    <th title="매수: E(EMA) M(MACD) R(RSI) V(VOL) A(ADX) P(근접) │ 매도: D(데스크로스) M(MACD↓)">조건</th>
     <th>시각</th>
   </tr></thead><tbody>`;
 
@@ -492,6 +496,12 @@ function renderTicks(items, flashSymbol, prevTick) {{
     const actionChanged = flashSymbol === t.symbol && prevTick && prevTick.action !== t.action;
     const flash = flashSymbol === t.symbol ? ' tick-flash' : '';
     const actionDot = actionChanged ? `<span style="font-size:.65rem;color:#f59e0b;margin-left:.3rem">▲</span>` : '';
+    const hasCond = Object.keys(c).length > 0;
+    const condCell = !hasCond ? '<td>-</td>' : `<td style="white-space:nowrap">
+      ${{buyPill('E',c.above_ema,'EMA 상승 정렬')}}${{buyPill('M',c.macd_just_pos,'MACD 양전환')}}${{buyPill('R',c.rsi_ok,'RSI 범위 내')}}${{buyPill('V',c.vol_ok,'거래량 충분')}}${{buyPill('A',c.adx_ok,'ADX ≥25')}}${{buyPill('P',c.ema_proximity_ok,'EMA 근접')}}
+      <span style="margin:0 3px;color:#334155;font-size:.7rem">│</span>
+      ${{sellPill('D',c.death_cross,'데스크로스')}}${{sellPill('M',c.macd_turned_neg,'MACD 음전환')}}
+    </td>`;
     return `<tr class="${{flash}}" id="tick-row-${{t.symbol.replace('/','_')}}">
       <td style="text-align:center;color:#475569;font-size:.72rem;font-weight:600">${{rank}}</td>
       <td><code>${{t.symbol}}</code></td>
@@ -500,6 +510,7 @@ function renderTicks(items, flashSymbol, prevTick) {{
       <td style="color:#94a3b8;font-size:.78rem">${{volKrw}}</td>
       <td style="color:${{rsiColor}};font-size:.78rem">${{rsi}}</td>
       <td style="color:${{macdColor}};font-size:.78rem">${{macdVal}}</td>
+      ${{condCell}}
       <td style="color:#475569;font-size:.75rem">${{ts}}</td>
     </tr>`;
   }}).join('');
@@ -915,22 +926,24 @@ def _render_ticks(ticks: list[dict]) -> str:
     if not ticks:
         return '<p class="empty">아직 평가 없음 (첫 tick 대기 중)</p>'
     action_color = {"BUY": "#10b981", "SELL": "#ef4444", "HOLD": "#64748b"}
-    ticks = sorted(
-        ticks,
-        key=lambda x: (x.get("metadata") or {}).get("vol_krw") or 0,
-        reverse=True,
-    )
+    # ticks already ranked by 24h quoteVolume from state.get_ticks()
     thead = (
         '<table class="ticks-table"><thead><tr>'
         "<th style='width:2rem;text-align:center'>#</th>"
-        "<th>종목</th><th>신호</th><th>현재가</th><th>거래대금</th><th>RSI</th><th>MACD</th><th>시각</th>"
+        "<th>종목</th><th>신호</th><th>현재가</th><th>거래대금</th><th>RSI</th><th>MACD</th>"
+        "<th title='매수: E M R V A P │ 매도: D M'>조건</th><th>시각</th>"
         "</tr></thead><tbody>"
     )
+
+    def _pill(label: str, active: bool, buy: bool) -> str:
+        cls = ("cp-buy" if buy else "cp-sell") if active else "cp-dim"
+        return f"<span class='cp {cls}'>{label}</span>"
 
     def _row(rank: int, t: dict) -> str:
         action = t.get("action", "HOLD")
         color = action_color.get(action, "#64748b")
         meta = t.get("metadata") or {}
+        cond = meta.get("cond") or {}
         price = meta.get("price")
         sym = t["symbol"]
         price_str = (
@@ -944,6 +957,20 @@ def _render_ticks(ticks: list[dict]) -> str:
         vol_krw = meta.get("vol_krw")
         vol_str = f"₩{vol_krw:,.0f}" if vol_krw else "-"
         ts = (t.get("timestamp") or "")[-8:-3]
+        if cond:
+            cond_html = (
+                _pill("E", cond.get("above_ema", False), True)
+                + _pill("M", cond.get("macd_just_pos", False), True)
+                + _pill("R", cond.get("rsi_ok", False), True)
+                + _pill("V", cond.get("vol_ok", False), True)
+                + _pill("A", cond.get("adx_ok", False), True)
+                + _pill("P", cond.get("ema_proximity_ok", False), True)
+                + "<span style='margin:0 3px;color:#334155;font-size:.7rem'>│</span>"
+                + _pill("D", cond.get("death_cross", False), False)
+                + _pill("M", cond.get("macd_turned_neg", False), False)
+            )
+        else:
+            cond_html = "-"
         return (
             f"<tr>"
             f"<td style='text-align:center;color:#475569;font-size:.72rem;font-weight:600'>{rank}</td>"
@@ -953,6 +980,7 @@ def _render_ticks(ticks: list[dict]) -> str:
             f"<td style='color:#94a3b8;font-size:.78rem'>{vol_str}</td>"
             f"<td style='color:#94a3b8;font-size:.78rem'>{rsi}</td>"
             f"<td style='color:#94a3b8;font-size:.78rem'>{macd_str}</td>"
+            f"<td style='white-space:nowrap'>{cond_html}</td>"
             f"<td style='color:#475569;font-size:.72rem'>{ts}</td>"
             f"</tr>"
         )

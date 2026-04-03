@@ -183,15 +183,16 @@ class DashboardState:
             return {}
 
     def get_ticks(self) -> list[dict]:
-        """Return latest tick evaluation result per symbol, sorted by vol_krw (거래금액) descending."""
+        """Return latest tick evaluation result per symbol, ordered by 24h ranked list (Upbit quoteVolume)."""
         eng = self.engine
         if eng is None:
             return []
         ticks = getattr(eng, "_latest_ticks", {})
+        ranked = getattr(eng, "_ranked_symbols", [])
+        rank_map = {sym: i for i, sym in enumerate(ranked)}
         return sorted(
             ticks.values(),
-            key=lambda x: (x.get("metadata") or {}).get("vol_krw") or 0,
-            reverse=True,
+            key=lambda x: rank_map.get(x.get("symbol", ""), len(ranked)),
         )
 
     def get_balance(self) -> list[dict]:

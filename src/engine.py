@@ -93,6 +93,7 @@ class TradingEngine:
         self._sync_anchor: str = ""  # first symbol in the list — triggers KRW sync
         self._tick_symbols: set[str] = set()  # currently scheduled tick symbols
         self._tick_interval: int = 60  # stored at start() for dynamic symbol additions
+        self._ranked_symbols: list[str] = []  # 24h vol-ranked order from last refresh
         self._journal = (
             TradeJournal.from_store(journal_store)
             if journal_store is not None
@@ -751,9 +752,10 @@ class TradingEngine:
             )
             self._tick_symbols.add(sym)
 
-        # Update sync anchor to highest-volume symbol
+        # Update sync anchor and preserve 24h-ranked order for display
         if new_top:
             self._sync_anchor = new_top[0]
+            self._ranked_symbols = new_top
 
         if added or actually_removed:
             logger.info(
