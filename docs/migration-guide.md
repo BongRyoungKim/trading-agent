@@ -1,6 +1,6 @@
 # 트레이딩 에이전트 — PC 이관 가이드 (GitHub 방식)
 
-> 작성일: 2026-03-30
+> 최종 수정: 2026-04-06
 > 소스코드: https://github.com/aphenix-debug/trading-agent (Private)
 > API 키와 거래 DB는 별도로 안전하게 전달합니다.
 
@@ -12,8 +12,8 @@
 [기존 PC]                          [새 PC]
 ─────────────────────              ─────────────────────────────
 1. GitHub에 코드 push
-2. DB + .env 백업
-3. 프로세스 종료          →        4. Python / Git 설치
+2. 엔진 종료 후 DB + .env 백업
+3. 프로세스 종료              →    4. Python / Git 설치
                                    5. git clone + pip install
                                    6. DB 복원 + .env 설정
                                    7. 실행 및 검증
@@ -30,7 +30,7 @@ git config user.name
 git config user.email
 ```
 
-설정이 비어 있으면 아래와 같이 입력:
+설정이 비어 있으면:
 
 ```powershell
 git config --global user.name "aphenix"
@@ -55,7 +55,7 @@ gh auth status
 cd C:\Users\YOUR_USERNAME\Project\Trading_Agent
 
 git add .
-git commit -m "feat: 변경 내용 설명"
+git commit -m "feat: 이관 전 최종 상태"
 git push origin master
 ```
 
@@ -93,7 +93,6 @@ copy C:\Users\YOUR_USERNAME\Project\Trading_Agent\.env `
 ```
 
 > `YOUR_USERNAME`은 본인의 Windows 사용자명으로 변경하세요.
-> (예: `C:\Users\aphen\Project\...`)
 
 ### 2-2. 백업 파일 확인
 
@@ -261,7 +260,7 @@ notepad C:\Users\YOUR_USERNAME\Project\Trading_Agent\.env
 
 아래 내용 입력 후 저장:
 
-```
+```env
 EXCHANGE=upbit
 TRADING_MODE=live
 UPBIT_ACCESS_KEY=여기에_업비트_액세스키_입력
@@ -303,7 +302,42 @@ powercfg /query SCHEME_CURRENT SUB_SLEEP 29f6c1db-86da-48c5-9fdb-f2b67b1f44da
 # "현재 AC 전원 설정 값: 0x00000000" 이면 정상
 ```
 
-### 7-2. 트레이딩 에이전트 실행
+### 7-2. start_agent.bat 생성 (자동 실행 스크립트)
+
+> `YOUR_USERNAME`을 실제 Windows 사용자명으로 변경하세요.
+
+```powershell
+notepad C:\Users\YOUR_USERNAME\Project\Trading_Agent\start_agent.bat
+```
+
+아래 내용 입력 후 저장:
+
+```bat
+@echo off
+cd /D C:\Users\YOUR_USERNAME\Project\Trading_Agent
+set PYTHONUTF8=1
+py -m src.main ^
+  --mode live ^
+  --strategy Scalping5mStrategy ^
+  --interval 60 ^
+  --dashboard-port 8000 ^
+  --telegram-bot ^
+  --symbols BTC/KRW
+```
+
+> 심볼 목록은 본인 전략에 맞게 변경하세요.
+> `^`는 PowerShell의 백틱(`) 역할입니다 (bat 파일 줄 이음).
+
+### 7-3. 트레이딩 에이전트 실행
+
+**방법 A — bat 파일 실행 (권장)**
+
+```powershell
+cd C:\Users\YOUR_USERNAME\Project\Trading_Agent
+.\start_agent.bat
+```
+
+**방법 B — 직접 실행**
 
 > ⚠️ Windows에서 한글 로그 깨짐 방지를 위해 `PYTHONUTF8=1`을 반드시 설정합니다.
 
@@ -317,12 +351,10 @@ py -m src.main `
   --interval 60 `
   --dashboard-port 8000 `
   --telegram-bot `
-  --symbols ONT/KRW ANKR/KRW FLOCK/KRW NOM/KRW ORDER/KRW DOOD/KRW ELSA/KRW STRAX/KRW API3/KRW ONG/KRW
+  --symbols BTC/KRW
 ```
 
-> 심볼 목록은 본인 전략에 맞게 변경하세요.
-
-### 7-3. 정상 실행 확인 (로그)
+### 7-4. 정상 실행 확인 (로그)
 
 아래 항목들이 모두 표시되어야 합니다:
 
@@ -336,7 +368,25 @@ Sleep prevention enabled (SetThreadExecutionState)
 TradingEngine running — press Ctrl+C to stop
 ```
 
-### 7-4. 대시보드 확인
+### 7-5. 헬스체크 서버 확인
+
+엔진 시작 후 별도 터미널 또는 브라우저에서 확인:
+
+```powershell
+# 터미널에서 확인
+Invoke-WebRequest http://localhost:8080/health | Select-Object StatusCode
+# 200 이면 정상
+
+Invoke-WebRequest http://localhost:8080/ready | Select-Object StatusCode
+# 200 이면 엔진 준비 완료, 503 이면 시작 중
+```
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `GET /health` | 항상 200 — 프로세스 생존 확인 |
+| `GET /ready` | 200 = 엔진 준비 완료, 503 = 시작 중 또는 종료 중 |
+
+### 7-6. 대시보드 확인
 
 브라우저에서 접속:
 
@@ -350,6 +400,17 @@ http://localhost:8000
 - 약 1분 후 신호 평가 현황 갱신
 - 텔레그램 봇에서 시작 알림 수신
 
+### 7-7. 텔레그램 봇 명령어
+
+`--telegram-bot` 플래그 활성화 시 아래 명령어를 사용할 수 있습니다:
+
+| 명령어 | 기능 |
+|--------|------|
+| `/status` | 현재 포지션, 잔고, 엔진 상태 조회 |
+| `/pause` | 신규 진입 일시 중지 (보유 포지션 유지) |
+| `/resume` | 일시 중지 해제 |
+| `/report` | 즉시 성과 리포트 출력 |
+
 ---
 
 ## STEP 8 — 기존 PC 완전 종료 (STEP 3 이전에 미실행한 경우)
@@ -360,13 +421,35 @@ Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force
 
 ---
 
+## 주요 CLI 옵션 요약
+
+| 옵션 | 기본값 | 설명 |
+|------|--------|------|
+| `--mode` | .env 기준 | `live` / `paper` / `backtest` |
+| `--strategy` | `MACrossoverStrategy` | 전략 클래스명 |
+| `--symbols` | `BTC/KRW` | 거래 심볼 (복수 가능) |
+| `--interval` | `60` | 폴링 주기 (초) |
+| `--dashboard-port` | `0` (비활성) | 웹 대시보드 포트 |
+| `--health-port` | `8080` | 헬스체크 서버 포트 (0=비활성) |
+| `--telegram-bot` | 비활성 | 텔레그램 명령어 수신 활성화 |
+| `--heartbeat-interval` | `1800` | 텔레그램 heartbeat 주기 (초, 0=비활성) |
+| `--trailing-stop-pct` | 비활성 | 트레일링 스톱 비율 (예: `2.0` = 2%) |
+| `--slippage-bps` | `5.0` | 페이퍼 트레이딩 슬리피지 (bps) |
+| `--skip-checks` | 비활성 | 프리플라이트 체크 생략 (비권장) |
+| `--market-hours` | 24/7 | 거래 시간 제한 (예: `09:00-18:00`) |
+| `--trading-days` | `mon-sun` | 거래 요일 (예: `mon-fri`) |
+| `--list-strategies` | — | 등록된 전략 목록 출력 후 종료 |
+| `--websocket` | 비활성 | Binance WebSocket 피드 사용 |
+
+---
+
 ## 이관 완료 체크리스트
 
 ```
 [기존 PC]
 □ git push origin master 완료
   - git add .
-  - git commit -m "feat: ..."
+  - git commit -m "feat: 이관 전 최종 상태"
   - git push origin master
 
 □ 엔진 종료 후 DB 백업 완료
@@ -387,11 +470,15 @@ Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force
 □ data/journal.db 복원 완료 (크기 > 0)
 □ data/positions.db 복원 완료 (이관 시) 또는 삭제 (초기화 시)
 □ .env 파일 작성 완료 (TRADING_MODE=live 포함)
+□ start_agent.bat 생성 및 YOUR_USERNAME 수정 완료
 □ powercfg 절전 비활성화 완료
-□ $env:PYTHONUTF8=1 설정 후 py -m src.main 실행
+□ .\start_agent.bat 실행
 □ [PASS] 5개 항목 확인
+□ http://localhost:8080/health → 200 확인
+□ http://localhost:8080/ready → 200 확인
 □ http://localhost:8000 대시보드 접속 확인
-□ 텔레그램 알림 수신 확인
+□ 텔레그램 시작 알림 수신 확인
+□ 텔레그램 /status 명령어 응답 확인
 ```
 
 ---
@@ -418,7 +505,6 @@ git push origin master
 
 ```powershell
 # Python 재설치 시 "Add Python to PATH" 체크 필수
-# 또는 아래 명령어로 PATH 수동 확인
 where python
 where py
 ```
@@ -430,11 +516,12 @@ py -m pip install --upgrade pip
 py -m pip install -r requirements.txt
 ```
 
-### 포트 8000 이미 사용 중
+### 포트 8000 또는 8080 이미 사용 중
 
 ```powershell
 # 사용 중인 프로세스 확인
 netstat -ano | findstr :8000
+netstat -ano | findstr :8080
 
 # PID로 종료 (숫자는 실제 PID로 변경)
 taskkill /PID 12345 /F
@@ -443,7 +530,7 @@ taskkill /PID 12345 /F
 ### 한글 로그 깨짐 (UnicodeEncodeError)
 
 ```powershell
-# 실행 전 반드시 설정
+# 실행 전 반드시 설정 (또는 start_agent.bat 안에 set PYTHONUTF8=1 추가)
 $env:PYTHONUTF8=1
 py -m src.main ...
 ```
@@ -451,10 +538,8 @@ py -m src.main ...
 ### DB 파일 크기가 0일 때 (복사 실패)
 
 ```powershell
-# 파일 크기 확인
 Get-Item .\data\journal.db | Select-Object Name, Length
 # Length가 0이면 백업 파일에서 다시 복사
-
 copy D:\trading_backup\journal.db .\data\journal.db
 ```
 
@@ -481,5 +566,32 @@ icacls ".\data" /grant "%USERNAME%:F"
 
 ```powershell
 del .\data\positions.db
-py -m src.main ...
+.\start_agent.bat
+```
+
+### 헬스체크 서버 응답 없음
+
+```powershell
+# 포트 확인
+netstat -ano | findstr :8080
+
+# 비활성화하고 싶으면 --health-port 0 추가
+py -m src.main ... --health-port 0
+```
+
+### Startup Check 실패 (CRITICAL)
+
+특정 체크가 FAIL인 경우 원인 별 조치:
+
+| 체크 항목 | 원인 | 조치 |
+|-----------|------|------|
+| `credentials` | .env에 API 키 없음 | .env 파일 확인 |
+| `exchange_connectivity` | 네트워크/API 키 오류 | 인터넷 연결, API 키 재확인 |
+| `risk_params` | 리스크 파라미터 범위 초과 | .env의 MAX_* 값 확인 |
+| `db_writable` | data/ 폴더 없음 또는 권한 없음 | `mkdir data`, `icacls` 재설정 |
+
+체크를 우회하고 싶으면 (비권장):
+
+```powershell
+py -m src.main ... --skip-checks
 ```

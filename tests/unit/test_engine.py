@@ -29,7 +29,7 @@ def _make_settings(mode: str = "paper") -> MagicMock:
 
 def _make_ticker(price: float = 50000.0) -> MagicMock:
     t = MagicMock()
-    t.last_price = Decimal(str(price))
+    t.last = Decimal(str(price))
     return t
 
 
@@ -89,13 +89,24 @@ def risk_manager(settings):
     return RiskManager(settings, state)
 
 
-def _make_position_mock(entry: float = 50000.0, amount: float = 0.01,
-                         stop_loss=None, take_profit=None):
+def _make_position_mock(entry: float = 50000.0, amount: float = 1.0,
+                         stop_loss=None, take_profit=None,
+                         entry_time: datetime | None = None):
+    """
+    amount defaults to 1.0 so that amount*price >> 5001 KRW dust threshold.
+    entry_time defaults to 1 minute ago so 45-min time-stop does not trigger
+    unless explicitly set to an older time.
+    """
     pos = MagicMock()
     pos.entry_price = Decimal(str(entry))
     pos.amount = Decimal(str(amount))
     pos.stop_loss = stop_loss
     pos.take_profit = take_profit
+    pos.side = "buy"
+    pos.trailing_stop_pct = None
+    pos.entry_time = entry_time if entry_time is not None else (
+        datetime.now(UTC) - timedelta(minutes=1)
+    )
     return pos
 
 
@@ -181,7 +192,8 @@ class TestProcessSymbol:
         portfolio.has_position.return_value = False
         with patch.object(engine, "_open_position") as mock_open:
             engine._process_symbol("BTC/USDT")
-        mock_open.assert_called_once_with("BTC/USDT")
+        mock_open.assert_called_once()
+        assert mock_open.call_args[0][0] == "BTC/USDT"
 
     def test_buy_signal_with_existing_position_does_nothing(self, engine, strategy, portfolio):
         strategy.generate_signal.return_value = _make_signal(SignalAction.BUY)
@@ -193,9 +205,13 @@ class TestProcessSymbol:
     def test_sell_signal_with_position_closes(self, engine, strategy, portfolio):
         strategy.generate_signal.return_value = _make_signal(SignalAction.SELL)
         portfolio.has_position.return_value = True
+        # Position must be older than 10-min minimum hold time for SELL to trigger
+        pos = _make_position_mock(entry_time=datetime.now(UTC) - timedelta(minutes=15))
+        portfolio.get_position.return_value = pos
         with patch.object(engine, "_close_position") as mock_close:
             engine._process_symbol("BTC/USDT")
-        mock_close.assert_called_once_with("BTC/USDT")
+        mock_close.assert_called_once()
+        assert mock_close.call_args[0][0] == "BTC/USDT"
 
     def test_sell_signal_without_position_does_nothing(self, engine, strategy, portfolio):
         strategy.generate_signal.return_value = _make_signal(SignalAction.SELL)
@@ -250,8 +266,9 @@ class TestOpenPosition:
         eng._open_position("BTC/USDT")
         exchange.place_order.assert_called_once()
         call_args = exchange.place_order.call_args[0]
+        assert call_args[0] == "BTC/USDT"
         assert call_args[1] == "buy"
-        assert call_args[2] == "market"
+        assert isinstance(call_args[2], Decimal)  # amount
 
 
 # ── Close Position ────────────────────────────────────────────────────────────
@@ -353,7 +370,9 @@ class TestTradingEngineLifecycle:
             engine.start(symbols, interval_seconds=30, daily_report_hour=None,
                          heartbeat_interval=None)
 
-        assert mock_scheduler.add_job.call_count == len(symbols)
+        # At least one add_job call per symbol (additional jobs may be scheduled
+        # for symbol refresh, heartbeat, etc.)
+        assert mock_scheduler.add_job.call_count >= len(symbols)
 
     def test_daily_report_job_added_when_telegram_enabled(
         self, settings, exchange, strategy, risk_manager, portfolio

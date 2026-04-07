@@ -159,6 +159,99 @@ class TradingEngine:
     def trailing_stop_pct(self, value: float | Decimal | None) -> None:
         self._trailing_stop_pct = Decimal(str(value)) if value is not None else None
 
+    def _check_exit_conditions(self, symbol: str) -> bool:
+        """
+        Check and execute SL/TP/trailing/time-stop/dust removal for an open position.
+        Returns True if the position was closed, False otherwise.
+        Called before the market-hours guard so positions are protected 24/7.
+        """
+        if not self._portfolio.has_position(symbol):
+            return False
+
+        pos = self._portfolio.get_position(symbol)
+        ticker = self._exchange.get_ticker(symbol)
+        price = ticker.last
+
+        # Propagate live ticker price to _latest_ticks immediately so the
+        # dashboard reflects the current price between strategy evaluations.
+        existing_tick = self._latest_ticks.get(symbol)
+        if existing_tick is not None:
+            updated_meta = {**(existing_tick.get("metadata") or {}), "price": float(price)}
+            self._latest_ticks[symbol] = {**existing_tick, "metadata": updated_meta}
+
+        # ── dust position removal (value ≤ 5,001 KRW) ─────────────────────
+        if pos.amount * price <= self._DUST_THRESHOLD_KRW:
+            pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
+            self._risk_manager.on_position_closed(pnl)
+            logger.info(
+                "Dust position removed",
+                symbol=symbol,
+                value_krw=float(pos.amount * price),
+                pnl=float(pnl),
+            )
+            self._journal.record(
+                TradeRecord(
+                    symbol=symbol,
+                    side=pos.side,
+                    amount=pos.amount,
+                    entry_price=pos.entry_price,
+                    exit_price=price,
+                    entry_time=pos.entry_time,
+                    exit_time=datetime.now(UTC),
+                    pnl=pnl,
+                    commission=Decimal("0"),
+                    reason="dust",
+                )
+            )
+            return True
+
+        # ── trailing stop ratchet ──────────────────────────────────────────
+        trailing_pct = pos.trailing_stop_pct if pos.trailing_stop_pct is not None \
+            else self._trailing_stop_pct
+        if trailing_pct is not None and pos.side == "buy":
+            new_trail = price * (Decimal("1") - trailing_pct / Decimal("100"))
+            if pos.stop_loss is None or new_trail > pos.stop_loss:
+                pos = self._portfolio.update_stop_loss(symbol, new_trail)
+
+        if pos.stop_loss is not None and price <= pos.stop_loss:
+            logger.info(
+                "Stop-loss triggered",
+                symbol=symbol,
+                stop_loss=float(pos.stop_loss),
+                price=float(price),
+            )
+            self._close_position(symbol, forced_price=price, reason="stop_loss")
+            self._notify_close(symbol, price, reason="stop_loss")
+            return True
+
+        if pos.take_profit is not None and price >= pos.take_profit:
+            logger.info(
+                "Take-profit triggered",
+                symbol=symbol,
+                take_profit=float(pos.take_profit),
+                price=float(price),
+            )
+            self._close_position(symbol, forced_price=price, reason="take_profit")
+            self._notify_close(symbol, price, reason="take_profit")
+            return True
+
+        # ── time-based stop — cut losers after 45 min ─────────────────────
+        hold_min = (datetime.now(UTC) - pos.entry_time).total_seconds() / 60
+        if hold_min >= 45 and price < pos.entry_price * Decimal("0.997"):
+            logger.info(
+                "Time-stop triggered — position losing after 45 min",
+                symbol=symbol,
+                hold_min=round(hold_min),
+                entry_price=float(pos.entry_price),
+                price=float(price),
+                loss_pct=round(float((price - pos.entry_price) / pos.entry_price * 100), 2),
+            )
+            self._close_position(symbol, forced_price=price, reason="time_stop")
+            self._notify_close(symbol, price, reason="time_stop")
+            return True
+
+        return False
+
     def tick(self, symbol: str) -> None:
         """
         Single evaluation cycle for one symbol.
@@ -168,8 +261,17 @@ class TradingEngine:
             logger.debug("Engine paused, tick skipped", symbol=symbol)
             return
 
+        # SL/TP/trailing/time-stop must fire even outside trading hours to
+        # protect open positions around the clock.
         if not self._market_hours.is_trading_time():
-            logger.debug("Outside trading hours, tick skipped", symbol=symbol)
+            if self._portfolio.has_position(symbol):
+                try:
+                    with self._circuit_breaker:
+                        self._check_exit_conditions(symbol)
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                logger.debug("Outside trading hours, tick skipped", symbol=symbol)
             return
 
         # ── Live: sync portfolio cash with real KRW balance once per cycle ───
@@ -241,6 +343,12 @@ class TradingEngine:
 
         if self._mode == "live":
             self._reconcile_positions(symbols)
+            # Any position restored from DB or exchange that isn't in the initial
+            # symbol list must still be scheduled for ticking (SL/TP, exit signals).
+            extra = [s for s in self._portfolio.open_symbols() if s not in set(symbols)]
+            if extra:
+                logger.info("Scheduling tick jobs for restored positions outside initial symbol list", symbols=extra)
+                symbols = symbols + extra
 
         provider = self._strategy_provider
         if hasattr(provider, "strategy_names"):
@@ -348,78 +456,8 @@ class TradingEngine:
 
     def _process_symbol(self, symbol: str) -> None:
         # ── Step 1: stop-loss / take-profit check ─────────────────────────────
-        if self._portfolio.has_position(symbol):
-            pos = self._portfolio.get_position(symbol)
-            ticker = self._exchange.get_ticker(symbol)
-            price = ticker.last
-
-            # ── Step 1b: dust position removal (value ≤ 5,001 KRW) ───────────
-            if pos.amount * price <= self._DUST_THRESHOLD_KRW:
-                pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
-                self._risk_manager.on_position_closed(pnl)
-                logger.info(
-                    "Dust position removed",
-                    symbol=symbol,
-                    value_krw=float(pos.amount * price),
-                    pnl=float(pnl),
-                )
-                self._journal.record(
-                    TradeRecord(
-                        symbol=symbol,
-                        side=pos.side,
-                        amount=pos.amount,
-                        entry_price=pos.entry_price,
-                        exit_price=price,
-                        entry_time=pos.entry_time,
-                        exit_time=datetime.now(UTC),
-                        pnl=pnl,
-                        commission=Decimal("0"),
-                        reason="dust",
-                    )
-                )
-                return
-
-            # ── Step 1a: trailing stop ratchet ────────────────────────────────
-            trailing_pct = pos.trailing_stop_pct if pos.trailing_stop_pct is not None \
-                else self._trailing_stop_pct
-            if trailing_pct is not None and pos.side == "buy":
-                new_trail = price * (Decimal("1") - trailing_pct / Decimal("100"))
-                if pos.stop_loss is None or new_trail > pos.stop_loss:
-                    pos = self._portfolio.update_stop_loss(symbol, new_trail)
-
-            if pos.stop_loss is not None and price <= pos.stop_loss:
-                logger.info(
-                    "Stop-loss triggered",
-                    symbol=symbol,
-                    stop_loss=float(pos.stop_loss),
-                    price=float(price),
-                )
-                self._close_position(symbol, forced_price=price, reason="stop_loss")
-                return
-
-            if pos.take_profit is not None and price >= pos.take_profit:
-                logger.info(
-                    "Take-profit triggered",
-                    symbol=symbol,
-                    take_profit=float(pos.take_profit),
-                    price=float(price),
-                )
-                self._close_position(symbol, forced_price=price, reason="take_profit")
-                return
-
-            # ── Step 1b: time-based stop — cut losers after 45 min ───────────
-            hold_min = (datetime.now(UTC) - pos.entry_time).total_seconds() / 60
-            if hold_min >= 45 and price < pos.entry_price * Decimal("0.997"):
-                logger.info(
-                    "Time-stop triggered — position losing after 45 min",
-                    symbol=symbol,
-                    hold_min=round(hold_min),
-                    entry_price=float(pos.entry_price),
-                    price=float(price),
-                    loss_pct=round(float((price - pos.entry_price) / pos.entry_price * 100), 2),
-                )
-                self._close_position(symbol, forced_price=price, reason="time_stop")
-                return
+        if self._check_exit_conditions(symbol):
+            return
 
         # ── Step 2: strategy signal ───────────────────────────────────────────
         strategy = self._resolve_strategy(symbol)
@@ -617,6 +655,26 @@ class TradingEngine:
         )
         self._telegram.send_order_filled(symbol, "buy", float(amount), float(fill_price))
 
+    def _notify_close(self, symbol: str, price: Decimal, reason: str) -> None:
+        """Fire tick_callbacks with a synthetic SELL tick after SL/TP/time-stop close.
+
+        This lets the dashboard SSE stream immediately notify the browser so it
+        can refresh the open-positions panel without waiting for the next 5-second poll.
+        """
+        tick_data = {
+            "symbol": symbol,
+            "action": "SELL",
+            "reason": reason,
+            "metadata": {**(self._latest_ticks.get(symbol, {}).get("metadata") or {}), "price": float(price)},
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        self._latest_ticks[symbol] = tick_data
+        for _cb in self._tick_callbacks:
+            try:
+                _cb(tick_data)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Tick callback error in _notify_close (non-fatal): {exc}")
+
     def _close_position(
         self,
         symbol: str,
@@ -637,33 +695,16 @@ class TradingEngine:
             try:
                 order = self._exchange.place_order(symbol, "sell", position.amount)
             except Exception as exc:
+                # Keep position in tracking and retry on the next tick.
+                # Removing the position here would leave the coin stranded on the
+                # exchange with no SL/TP oversight — far more dangerous than retrying.
                 logger.error(
-                    f"Sell order failed: {exc} — removing position to prevent retry loop "
+                    f"Sell order failed: {exc} — position kept, retrying next tick "
                     f"| symbol={symbol} amount={float(position.amount):.4f}",
                 )
-                pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
-                self._risk_manager.on_position_closed(pnl)
-                self._journal.record(
-                    TradeRecord(
-                        symbol=symbol,
-                        side=position.side,
-                        amount=position.amount,
-                        entry_price=position.entry_price,
-                        exit_price=price,
-                        entry_time=position.entry_time,
-                        exit_time=datetime.now(UTC),
-                        pnl=pnl,
-                        commission=Decimal("0"),
-                        reason="sell_error",
-                    )
-                )
-                self._telegram.send_position_closed(
-                    symbol,
-                    float(position.entry_price),
-                    float(price),
-                    float(pnl),
-                    float(pnl / (position.entry_price * position.amount) * 100)
-                    if position.entry_price * position.amount > 0 else 0.0,
+                self._telegram.send_risk_alert(
+                    f"⚠️ Sell order failed for {symbol}: {exc}. "
+                    "Position kept — will retry on next tick."
                 )
                 return
             fill_price = order.price if order.price > 0 else price
@@ -839,13 +880,15 @@ class TradingEngine:
         if self._mode == "live":
             try:
                 balance = self._exchange.get_balance()
-                for sym in tracked:
+                # Check ALL exchange balances — not just tracked symbols.
+                # This recovers positions that were dropped due to a failed sell order
+                # or that belong to symbols outside the current top-N list.
+                for base_coin, bal_entry in balance.items():
+                    if base_coin in ("info", "free", "used", "total", "KRW"):
+                        continue
+                    sym = f"{base_coin}/KRW"
                     if sym in local_symbols:
                         continue  # already tracked
-                    base_coin = sym.split("/")[0]
-                    bal_entry = balance.get(base_coin)
-                    if bal_entry is None:
-                        continue
                     free_amount = Decimal(str(bal_entry.free))
                     if free_amount <= Decimal("0"):
                         continue

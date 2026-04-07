@@ -112,8 +112,8 @@ def render_dashboard(
     @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
     .toast{{position:fixed;bottom:2rem;right:2rem;background:#334155;padding:.7rem 1.2rem;border-radius:.5rem;font-size:.875rem;display:none;z-index:99}}
     /* SVG chart */
-    .chart-wrap{{width:100%;overflow:hidden;background:#0f172a;border-radius:.5rem;margin-top:.5rem}}
-    svg{{width:100%;height:180px}}
+    .chart-wrap{{width:100%;overflow:hidden;background:#0f172a;border-radius:.75rem;margin-top:.5rem;padding:.5rem}}
+    svg{{width:100%;height:auto;display:block}}
     /* Stats grid */
     .stats-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;margin-top:.25rem}}
     .stat-box{{background:#0f172a;border-radius:.5rem;padding:.75rem;text-align:center}}
@@ -732,26 +732,37 @@ function renderEquity(pts) {{
   const maxAbs = Math.max(Math.abs(maxVal), Math.abs(minVal), 1);
   const range = Math.max(maxVal - minVal, 1);
 
-  const W = 1000, H = 180, padL = 58, padR = 14, padT = 28, padB = 28;
+  const W = 1000, H = 300, padL = 82, padR = 20, padT = 56, padB = 44;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
   const n = allDates.length;
-  const barW = Math.max(6, chartW / n - 3);
+  const barW = Math.max(9, chartW / n - 3);
   const zeroY = padT + chartH * maxVal / range;
 
   let svgParts = [];
 
-  // 배경 눈금선
-  [-1, 0, 1].forEach(factor => {{
+  // 차트 영역 배경
+  svgParts.push(`<rect x="${{padL}}" y="${{padT}}" width="${{chartW}}" height="${{chartH}}" fill="#080e1a"/>`);
+
+  // 오늘 날짜 하이라이트
+  const todayIdx = allDates.indexOf(todayStr);
+  if (todayIdx >= 0) {{
+    const tx = padL + (todayIdx + 0.5) * chartW / n - barW / 2 - 4;
+    svgParts.push(`<rect x="${{tx.toFixed(1)}}" y="${{padT}}" width="${{(barW + 8).toFixed(1)}}" height="${{chartH}}" fill="#ffffff07"/>`);
+  }}
+
+  // 배경 눈금선 (5단계)
+  [-1, -0.5, 0, 0.5, 1].forEach(factor => {{
     const lineV = factor * maxAbs;
     const lineY = padT + chartH * (maxVal - lineV) / range;
     if (lineY >= padT && lineY <= padT + chartH) {{
-      svgParts.push(`<line x1="${{padL}}" y1="${{lineY.toFixed(1)}}" x2="${{W-padR}}" y2="${{lineY.toFixed(1)}}" stroke="#1e293b" stroke-width="1" stroke-dasharray="${{factor===0?'4':'2'}}"/>`);
+      const isZero = factor === 0;
+      svgParts.push(`<line x1="${{padL}}" y1="${{lineY.toFixed(1)}}" x2="${{W-padR}}" y2="${{lineY.toFixed(1)}}" stroke="#1e293b" stroke-width="1" stroke-dasharray="${{isZero ? '4' : '2'}}"/>`);
       const labelV = Math.round(Math.abs(lineV));
-      if (labelV > 0) {{
-        const sign = lineV >= 0 ? '+' : '-';
-        svgParts.push(`<text x="${{padL-4}}" y="${{(lineY+3).toFixed(1)}}" fill="#475569" font-size="9" text-anchor="end">${{sign}}₩${{labelV.toLocaleString('ko-KR')}}</text>`);
-      }}
+      const sign = lineV > 0 ? '+' : (lineV < 0 ? '-' : '');
+      const labelColor = lineV > 0 ? '#10b981' : (lineV < 0 ? '#ef4444' : '#475569');
+      const labelText = isZero ? '0' : `${{sign}}₩${{labelV.toLocaleString('ko-KR')}}`;
+      svgParts.push(`<text x="${{padL-6}}" y="${{(lineY+4).toFixed(1)}}" fill="${{labelColor}}" font-size="13" text-anchor="end" font-family="system-ui,sans-serif">${{labelText}}</text>`);
     }}
   }});
 
@@ -762,19 +773,20 @@ function renderEquity(pts) {{
     const color = v >= 0 ? '#10b981' : '#ef4444';
     const barH = v !== 0 ? Math.max(1, Math.abs(v) / range * chartH) : 1;
     const barColor = v !== 0 ? color : '#1e293b';
+    const opacity = date === todayStr ? '1.0' : '0.82';
     const y = v >= 0 ? zeroY - barH : zeroY;
-    svgParts.push(`<rect x="${{x.toFixed(1)}}" y="${{y.toFixed(1)}}" width="${{barW.toFixed(1)}}" height="${{barH.toFixed(1)}}" fill="${{barColor}}" rx="1" opacity="0.85"/>`);
+    svgParts.push(`<rect x="${{x.toFixed(1)}}" y="${{y.toFixed(1)}}" width="${{barW.toFixed(1)}}" height="${{barH.toFixed(1)}}" fill="${{barColor}}" rx="2" opacity="${{opacity}}"/>`);
 
-    if (barH > 14 && v !== 0) {{
+    if (barH > 16 && v !== 0) {{
       const sign = v >= 0 ? '+' : '';
-      const labelY = v >= 0 ? y - 3 : y + barH + 10;
-      svgParts.push(`<text x="${{(x+barW/2).toFixed(1)}}" y="${{labelY.toFixed(1)}}" fill="${{color}}" font-size="8" text-anchor="middle" font-weight="600">${{sign}}₩${{Math.round(v).toLocaleString('ko-KR')}}</text>`);
+      const labelY = v >= 0 ? y - 4 : y + barH + 12;
+      svgParts.push(`<text x="${{(x+barW/2).toFixed(1)}}" y="${{labelY.toFixed(1)}}" fill="${{color}}" font-size="12" text-anchor="middle" font-weight="600" font-family="system-ui,sans-serif">${{sign}}₩${{Math.round(v).toLocaleString('ko-KR')}}</text>`);
     }}
 
     const day = parseInt(date.substring(8));
     if (day === 1 || day % 5 === 0 || date === todayStr) {{
       const labelColor = date === todayStr ? '#f8fafc' : '#64748b';
-      svgParts.push(`<text x="${{(x+barW/2).toFixed(1)}}" y="${{(H-6).toFixed(1)}}" fill="${{labelColor}}" font-size="9" text-anchor="middle">${{day}}일</text>`);
+      svgParts.push(`<text x="${{(x+barW/2).toFixed(1)}}" y="${{(H-10).toFixed(1)}}" fill="${{labelColor}}" font-size="13" text-anchor="middle" font-family="system-ui,sans-serif">${{day}}일</text>`);
     }}
   }});
 
@@ -782,8 +794,8 @@ function renderEquity(pts) {{
   const totalPnl = allDates.filter(d => d <= todayStr).reduce((s, d) => s + dailyByDate[d], 0);
   const totalSign = totalPnl >= 0 ? '+' : '';
   const totalColor = totalPnl >= 0 ? '#10b981' : '#ef4444';
-  svgParts.push(`<text x="${{padL}}" y="18" fill="#94a3b8" font-size="10">${{yyyy}}년 ${{parseInt(mm)}}월 일별 손익</text>`);
-  svgParts.push(`<text x="${{W-padR}}" y="20" fill="${{totalColor}}" font-size="15" text-anchor="end" font-weight="700">${{totalSign}}₩${{Math.round(totalPnl).toLocaleString('ko-KR')}}</text>`);
+  svgParts.push(`<text x="${{padL}}" y="22" fill="#94a3b8" font-size="15" font-family="system-ui,sans-serif">${{yyyy}}년 ${{parseInt(mm)}}월 일별 손익</text>`);
+  svgParts.push(`<text x="${{W-padR}}" y="26" fill="${{totalColor}}" font-size="20" text-anchor="end" font-weight="700" font-family="system-ui,sans-serif">${{totalSign}}₩${{Math.round(totalPnl).toLocaleString('ko-KR')}}</text>`);
 
   wrap.innerHTML = `<svg viewBox="0 0 ${{W}} ${{H}}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto">${{svgParts.join('')}}</svg>`;
 }}
@@ -878,14 +890,12 @@ def _render_equity_svg(equity: list[dict]) -> str:
     last_day = _cal.monthrange(today.year, today.month)[1]
     month_end = today.replace(day=last_day)
 
-    # 이번 달 날짜별 일일 손익 (equity는 이미 일별로 집계된 데이터)
     by_date: dict[str, float] = {}
     for pt in equity:
         d = pt.get("time", "")[:10]
         if d.startswith(prefix):
             by_date[d] = float(pt.get("pnl", 0.0))
 
-    # 1일~말일 전체 날짜 (거래 없는 날은 0)
     all_dates: list[str] = []
     cur = today.replace(day=1)
     while cur <= month_end:
@@ -903,74 +913,109 @@ def _render_equity_svg(equity: list[dict]) -> str:
     v_range = max(max_val - min_val, 1.0)
     max_abs = max(abs(max_val), abs(min_val), 1.0)
 
-    W, H = 1000, 180
-    pad_l, pad_r, pad_t, pad_b = 58, 14, 28, 28
+    W, H = 1000, 300
+    pad_l, pad_r, pad_t, pad_b = 82, 20, 56, 44
     chart_w = W - pad_l - pad_r
     chart_h = H - pad_t - pad_b
     n = len(all_dates)
-    bar_w = max(6.0, chart_w / n - 3)
+    bar_w = max(9.0, chart_w / n - 4)
     zero_y = pad_t + chart_h * max_val / v_range
+    today_str = today.strftime("%Y-%m-%d")
 
-    parts: list[str] = [f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto">']
+    parts: list[str] = [
+        f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" '
+        f'style="width:100%;height:auto;display:block">'
+    ]
 
-    # 눈금선 (상단/0/하단)
-    for factor in (-1, 0, 1):
+    # 차트 영역 배경
+    parts.append(
+        f'<rect x="{pad_l}" y="{pad_t}" width="{chart_w}" height="{chart_h}" '
+        f'fill="#080e1a" rx="4"/>'
+    )
+
+    # 눈금선 5레벨: ±max, ±mid, 0
+    for factor in (-1.0, -0.5, 0.0, 0.5, 1.0):
         line_v = factor * max_abs
         line_y = pad_t + chart_h * (max_val - line_v) / v_range
-        if pad_t <= line_y <= pad_t + chart_h:
-            dash = "4" if factor == 0 else "2"
-            parts.append(
-                f'<line x1="{pad_l}" y1="{line_y:.1f}" x2="{W-pad_r}" y2="{line_y:.1f}" '
-                f'stroke="#1e293b" stroke-width="1" stroke-dasharray="{dash}"/>'
-            )
-            if abs(line_v) > 0:
-                sign = "+" if line_v > 0 else "-"
-                parts.append(
-                    f'<text x="{pad_l - 4}" y="{line_y + 3:.1f}" fill="#475569" '
-                    f'font-size="9" text-anchor="end">{sign}₩{round(abs(line_v)):,}</text>'
-                )
+        if not (pad_t <= line_y <= pad_t + chart_h):
+            continue
+        if factor == 0.0:
+            stroke, stroke_w, dash = "#334155", "1.5", ""
+        else:
+            stroke, stroke_w, dash = "#1e2d3d", "1", "5,3"
+        parts.append(
+            f'<line x1="{pad_l}" y1="{line_y:.1f}" x2="{W - pad_r}" y2="{line_y:.1f}" '
+            f'stroke="{stroke}" stroke-width="{stroke_w}" stroke-dasharray="{dash}"/>'
+        )
+        label_v = round(abs(line_v))
+        if label_v == 0:
+            lcolor = "#475569"
+            ltext = "0"
+        else:
+            lcolor = "#10b981" if line_v > 0 else "#ef4444"
+            sign_ch = "+" if line_v > 0 else "-"
+            ltext = f"{sign_ch}₩{label_v:,}"
+        parts.append(
+            f'<text x="{pad_l - 8}" y="{line_y + 4.5:.1f}" fill="{lcolor}" '
+            f'font-size="13" text-anchor="end" font-family="system-ui,sans-serif">{ltext}</text>'
+        )
 
     # 막대 + 날짜 레이블
-    today_str = today.strftime("%Y-%m-%d")
     for i, d in enumerate(all_dates):
         v = daily[d]
         x = pad_l + (i + 0.5) * chart_w / n - bar_w / 2
         color = "#10b981" if v >= 0 else "#ef4444"
-        bh = max(1.0, abs(v) / v_range * chart_h) if v != 0 else 1.0
+        bh = max(2.0, abs(v) / v_range * chart_h) if v != 0 else 2.0
         bar_color = color if v != 0 else "#1e293b"
         y = zero_y - bh if v >= 0 else zero_y
-        parts.append(
-            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
-            f'fill="{bar_color}" rx="1" opacity="0.85"/>'
-        )
-        # 막대 값 레이블 (막대가 충분히 클 때)
-        if bh > 14 and v != 0:
-            sign = "+" if v >= 0 else ""
-            label_y = y - 3 if v >= 0 else y + bh + 10
+        is_today = d == today_str
+        opacity = "1" if is_today else "0.82"
+
+        if is_today:
             parts.append(
-                f'<text x="{x + bar_w/2:.1f}" y="{label_y:.1f}" fill="{color}" '
-                f'font-size="8" text-anchor="middle" font-weight="600">{sign}₩{round(v):,}</text>'
-            )
-        # 날짜 레이블: 1일, 5단위, 오늘
-        day_num = int(d[8:])
-        if day_num == 1 or day_num % 5 == 0 or d == today_str:
-            label_color = "#f8fafc" if d == today_str else "#64748b"
-            parts.append(
-                f'<text x="{x + bar_w/2:.1f}" y="{H - 6}" fill="{label_color}" '
-                f'font-size="9" text-anchor="middle">{day_num}일</text>'
+                f'<rect x="{x - 1:.1f}" y="{pad_t}" width="{bar_w + 2:.1f}" '
+                f'height="{chart_h}" fill="#ffffff07" rx="2"/>'
             )
 
-    # 월 제목 + 월 누적 합계 (일일 손익 합산)
+        parts.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
+            f'fill="{bar_color}" rx="2" opacity="{opacity}"/>'
+        )
+
+        # 막대 위 값 레이블 (충분히 클 때)
+        if bh > 22 and v != 0:
+            sign_ch = "+" if v >= 0 else ""
+            label_y = y - 7 if v >= 0 else y + bh + 15
+            parts.append(
+                f'<text x="{x + bar_w / 2:.1f}" y="{label_y:.1f}" fill="{color}" '
+                f'font-size="12" text-anchor="middle" font-weight="700" '
+                f'font-family="system-ui,sans-serif">{sign_ch}₩{round(v):,}</text>'
+            )
+
+        # 날짜 레이블: 1일·5단위·오늘
+        day_num = int(d[8:])
+        if day_num == 1 or day_num % 5 == 0 or is_today:
+            lcolor = "#f1f5f9" if is_today else "#64748b"
+            fw = "700" if is_today else "400"
+            parts.append(
+                f'<text x="{x + bar_w / 2:.1f}" y="{H - 13}" fill="{lcolor}" '
+                f'font-size="13" text-anchor="middle" font-weight="{fw}" '
+                f'font-family="system-ui,sans-serif">{day_num}일</text>'
+            )
+
+    # 헤더: 월 제목 (좌) + 누적 합계 (우)
     total = sum(daily.get(d, 0.0) for d in all_dates if d <= today_str)
     total_color = "#10b981" if total >= 0 else "#ef4444"
-    sign = "+" if total >= 0 else ""
+    sign_ch = "+" if total >= 0 else ""
     year, mon = today.year, today.month
     parts.append(
-        f'<text x="{pad_l}" y="18" fill="#94a3b8" font-size="10">{year}년 {mon}월 일별 손익</text>'
+        f'<text x="{pad_l}" y="30" fill="#94a3b8" font-size="15" font-weight="500" '
+        f'font-family="system-ui,sans-serif">{year}년 {mon}월 일별 손익</text>'
     )
     parts.append(
-        f'<text x="{W - pad_r}" y="20" fill="{total_color}" font-size="15" '
-        f'text-anchor="end" font-weight="700">{sign}₩{round(total):,}</text>'
+        f'<text x="{W - pad_r}" y="32" fill="{total_color}" font-size="26" '
+        f'text-anchor="end" font-weight="800" font-family="system-ui,sans-serif">'
+        f'{sign_ch}₩{round(total):,}</text>'
     )
     parts.append("</svg>")
     return "".join(parts)
