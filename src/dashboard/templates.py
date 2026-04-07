@@ -455,9 +455,9 @@ function _initTickStream() {{
 }}
 function _renderTicksFromMap(updatedSymbol, prevTick) {{
   const items = Object.values(_ticksMap).sort((a, b) => {{
-    const va = (a.metadata && a.metadata.vol_krw) || 0;
-    const vb = (b.metadata && b.metadata.vol_krw) || 0;
-    return vb - va;
+    const ra = a._rank != null ? a._rank : 9999;
+    const rb = b._rank != null ? b._rank : 9999;
+    return ra - rb;
   }});
   renderTicks(items, updatedSymbol, prevTick);
 }}

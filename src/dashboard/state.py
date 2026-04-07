@@ -30,6 +30,11 @@ class DashboardState:
 
     def notify_tick(self, tick: dict) -> None:
         """Called by the engine after each tick evaluation; pushes to SSE subscribers."""
+        eng = self.engine
+        if eng is not None:
+            ranked = getattr(eng, "_ranked_symbols", [])
+            rank_map = {sym: i for i, sym in enumerate(ranked)}
+            tick = {**tick, "_rank": rank_map.get(tick.get("symbol", ""), len(ranked))}
         with self._tick_queues_lock:
             queues = list(self._tick_queues)
         for q in queues:
@@ -199,17 +204,23 @@ class DashboardState:
             return {}
 
     def get_ticks(self) -> list[dict]:
-        """Return latest tick evaluation result per symbol, ordered by 24h ranked list (Upbit quoteVolume)."""
+        """Return latest tick evaluation result per symbol, ordered by 24h ranked list (Upbit quoteVolume).
+        Each tick includes a _rank field so the client can maintain the same order after SSE updates.
+        """
         eng = self.engine
         if eng is None:
             return []
         ticks = getattr(eng, "_latest_ticks", {})
         ranked = getattr(eng, "_ranked_symbols", [])
         rank_map = {sym: i for i, sym in enumerate(ranked)}
-        return sorted(
+        sorted_ticks = sorted(
             ticks.values(),
             key=lambda x: rank_map.get(x.get("symbol", ""), len(ranked)),
         )
+        return [
+            {**t, "_rank": rank_map.get(t.get("symbol", ""), len(ranked))}
+            for t in sorted_ticks
+        ]
 
     def get_balance(self) -> list[dict]:
         """Return tradeable coin balances (non-KRW, free > 0, active KRW market)."""
