@@ -194,6 +194,43 @@ class PortfolioTracker:
         )
         return updated
 
+    def update_amount(self, symbol: str, new_amount: Decimal) -> Position:
+        """
+        Correct the tracked amount for an open position to match the actual
+        exchange balance (e.g. after an InsufficientFunds error reveals a
+        discrepancy between tracked and real holdings).
+
+        Cash is NOT adjusted — the coins were already purchased and the cash
+        was deducted at open_position() time. Only the amount field is patched.
+
+        Returns the updated Position.
+
+        Raises:
+            TradingAgentError: If no open position for `symbol`.
+        """
+        if symbol not in self._positions:
+            raise TradingAgentError(
+                f"No open position for {symbol}",
+                details={"symbol": symbol},
+            )
+        old_position = self._positions[symbol]
+        updated = replace(old_position, amount=new_amount)
+        self._positions[symbol] = updated
+        if self._store is not None:
+            try:
+                self._store.save(updated)
+            except Exception as exc:
+                self._positions[symbol] = old_position
+                logger.error(f"Amount update failed to persist — rolled back: {exc}", symbol=symbol)
+                raise
+        logger.info(
+            "Position amount corrected to match exchange balance",
+            symbol=symbol,
+            old_amount=float(old_position.amount),
+            new_amount=float(new_amount),
+        )
+        return updated
+
     # ── Queries ───────────────────────────────────────────────────────────────
 
     def get_position(self, symbol: str) -> Position | None:

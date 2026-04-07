@@ -696,48 +696,13 @@ class TradingEngine:
             try:
                 order = self._exchange.place_order(symbol, "sell", sell_amount)
             except InsufficientFundsError as exc:
-                # Upbit reports insufficient funds — actual balance may differ from
-                # tracked position (e.g. partial fill, rounding, locked funds).
-                # Query real balance and retry once with the available amount.
-                coin = symbol.split("/")[0]
-                try:
-                    bal = self._exchange.get_balance()
-                    available = Decimal(str(bal.get(coin, {}).free or 0)) if bal.get(coin) else Decimal("0")
-                    if available > 0:
-                        logger.warning(
-                            f"InsufficientFunds for {symbol}: tracked={float(sell_amount):.4f}, "
-                            f"actual={float(available):.4f} — retrying with actual balance",
-                        )
-                        order = self._exchange.place_order(symbol, "sell", available)
-                        sell_amount = available
-                    else:
-                        logger.error(
-                            f"Sell failed and no {coin} balance available — removing ghost position "
-                            f"| symbol={symbol}",
-                        )
-                        self._telegram.send_risk_alert(
-                            f"⚠️ {symbol} 잔고 0 확인 — 고스트 포지션 제거. 거래소 계좌를 확인하세요."
-                        )
-                        pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
-                        self._risk_manager.on_position_closed(pnl)
-                        self._journal.record(
-                            TradeRecord(
-                                symbol=symbol,
-                                side=position.side,
-                                amount=position.amount,
-                                entry_price=position.entry_price,
-                                exit_price=price,
-                                entry_time=position.entry_time,
-                                exit_time=datetime.now(UTC),
-                                pnl=pnl,
-                                commission=Decimal("0"),
-                                reason="ghost_removed",
-                            )
-                        )
-                        return
-                except Exception as bal_exc:  # noqa: BLE001
+                # Upbit reports insufficient funds — sync tracked amount with the
+                # actual exchange balance, then retry once with the real amount.
+                actual = self.sync_position_amount(symbol)
+                if actual is None:
+                    # Balance query failed — keep and retry next tick
                     logger.error(
-                        f"Sell order failed and balance query also failed: {exc} / {bal_exc} "
+                        f"Sell order failed and balance sync failed: {exc} "
                         f"— position kept, retrying next tick | symbol={symbol}",
                     )
                     self._telegram.send_risk_alert(
@@ -745,6 +710,37 @@ class TradingEngine:
                         "Position kept — will retry on next tick."
                     )
                     return
+                if actual <= 0:
+                    # No coins on exchange — remove ghost position
+                    logger.error(
+                        f"Sell failed and zero balance confirmed — removing ghost position | symbol={symbol}",
+                    )
+                    self._telegram.send_risk_alert(
+                        f"⚠️ {symbol} 잔고 0 확인 — 고스트 포지션 제거. 거래소 계좌를 확인하세요."
+                    )
+                    pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
+                    self._risk_manager.on_position_closed(pnl)
+                    self._journal.record(
+                        TradeRecord(
+                            symbol=symbol,
+                            side=position.side,
+                            amount=position.amount,
+                            entry_price=position.entry_price,
+                            exit_price=price,
+                            entry_time=position.entry_time,
+                            exit_time=datetime.now(UTC),
+                            pnl=pnl,
+                            commission=Decimal("0"),
+                            reason="ghost_removed",
+                        )
+                    )
+                    return
+                logger.warning(
+                    f"InsufficientFunds for {symbol}: tracked={float(sell_amount):.4f}, "
+                    f"actual={float(actual):.4f} — retrying with actual balance",
+                )
+                order = self._exchange.place_order(symbol, "sell", actual)
+                sell_amount = actual
             except Exception as exc:
                 # Keep position in tracking and retry on the next tick.
                 # Removing the position here would leave the coin stranded on the
@@ -813,6 +809,45 @@ class TradingEngine:
             float(pnl),
             pnl_pct,
         )
+
+    def sync_position_amount(self, symbol: str) -> Decimal | None:
+        """
+        Query the actual coin balance from the exchange and update the tracked
+        position amount to match.  Returns the corrected amount, or None if the
+        position does not exist or the balance query fails.
+
+        Use this when an InsufficientFunds error reveals that the tracked amount
+        is higher than the real holdings (e.g. after a partial fill or rounding).
+        """
+        if not self._portfolio.has_position(symbol):
+            logger.warning("sync_position_amount called but no position found", symbol=symbol)
+            return None
+        coin = symbol.split("/")[0]
+        try:
+            bal = self._exchange.get_balance()
+            coin_bal = bal.get(coin)
+            available = Decimal(str(coin_bal.free)) if coin_bal is not None else Decimal("0")
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Balance query failed during position amount sync: {exc}", symbol=symbol)
+            return None
+
+        if available <= 0:
+            logger.warning(
+                "sync_position_amount: zero balance — position may be fully sold on exchange",
+                symbol=symbol,
+            )
+            return Decimal("0")
+
+        pos = self._portfolio.get_position(symbol)
+        if available == pos.amount:
+            return available  # already in sync
+
+        self._portfolio.update_amount(symbol, available)
+        self._telegram.send_risk_alert(
+            f"📊 {symbol} 포지션 수량 업비트 잔고 기준으로 수정: "
+            f"{float(pos.amount):.4f} → {float(available):.4f}"
+        )
+        return available
 
     # ── Internal: dynamic symbol refresh ─────────────────────────────────────
 
