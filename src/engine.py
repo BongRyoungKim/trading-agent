@@ -27,7 +27,7 @@ from src.data.validator import OHLCVValidator
 from src.exchange.slippage import SlippageConfig, apply_slippage
 from src.health import get_health_state
 from src.utils.circuit_breaker import CircuitBreaker
-from src.utils.exceptions import CircuitBreakerOpenError, ConnectionError, PositionLimitExceededError, RiskError
+from src.utils.exceptions import CircuitBreakerOpenError, ConnectionError, InsufficientFundsError, PositionLimitExceededError, RiskError
 from src.utils.market_hours import MarketHoursConfig, market_hours_from_settings
 from src.utils.telegram import TelegramClient
 
@@ -692,15 +692,66 @@ class TradingEngine:
             price = ticker.last
 
         if self._mode == "live":
+            sell_amount = position.amount
             try:
-                order = self._exchange.place_order(symbol, "sell", position.amount)
+                order = self._exchange.place_order(symbol, "sell", sell_amount)
+            except InsufficientFundsError as exc:
+                # Upbit reports insufficient funds — actual balance may differ from
+                # tracked position (e.g. partial fill, rounding, locked funds).
+                # Query real balance and retry once with the available amount.
+                coin = symbol.split("/")[0]
+                try:
+                    bal = self._exchange.get_balance()
+                    available = Decimal(str(bal.get(coin, {}).free or 0)) if bal.get(coin) else Decimal("0")
+                    if available > 0:
+                        logger.warning(
+                            f"InsufficientFunds for {symbol}: tracked={float(sell_amount):.4f}, "
+                            f"actual={float(available):.4f} — retrying with actual balance",
+                        )
+                        order = self._exchange.place_order(symbol, "sell", available)
+                        sell_amount = available
+                    else:
+                        logger.error(
+                            f"Sell failed and no {coin} balance available — removing ghost position "
+                            f"| symbol={symbol}",
+                        )
+                        self._telegram.send_risk_alert(
+                            f"⚠️ {symbol} 잔고 0 확인 — 고스트 포지션 제거. 거래소 계좌를 확인하세요."
+                        )
+                        pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
+                        self._risk_manager.on_position_closed(pnl)
+                        self._journal.record(
+                            TradeRecord(
+                                symbol=symbol,
+                                side=position.side,
+                                amount=position.amount,
+                                entry_price=position.entry_price,
+                                exit_price=price,
+                                entry_time=position.entry_time,
+                                exit_time=datetime.now(UTC),
+                                pnl=pnl,
+                                commission=Decimal("0"),
+                                reason="ghost_removed",
+                            )
+                        )
+                        return
+                except Exception as bal_exc:  # noqa: BLE001
+                    logger.error(
+                        f"Sell order failed and balance query also failed: {exc} / {bal_exc} "
+                        f"— position kept, retrying next tick | symbol={symbol}",
+                    )
+                    self._telegram.send_risk_alert(
+                        f"⚠️ Sell order failed for {symbol}: {exc}. "
+                        "Position kept — will retry on next tick."
+                    )
+                    return
             except Exception as exc:
                 # Keep position in tracking and retry on the next tick.
                 # Removing the position here would leave the coin stranded on the
                 # exchange with no SL/TP oversight — far more dangerous than retrying.
                 logger.error(
                     f"Sell order failed: {exc} — position kept, retrying next tick "
-                    f"| symbol={symbol} amount={float(position.amount):.4f}",
+                    f"| symbol={symbol} amount={float(sell_amount):.4f}",
                 )
                 self._telegram.send_risk_alert(
                     f"⚠️ Sell order failed for {symbol}: {exc}. "
@@ -708,7 +759,7 @@ class TradingEngine:
                 )
                 return
             fill_price = order.price if order.price > 0 else price
-            commission = fill_price * position.amount * self._PAPER_COMMISSION_RATE
+            commission = fill_price * sell_amount * self._PAPER_COMMISSION_RATE
             if order.fee is not None:
                 commission = Decimal(str(order.fee))
         else:
