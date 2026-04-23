@@ -155,6 +155,35 @@ def _build_parser() -> argparse.ArgumentParser:
             "Only supported for Binance exchange."
         ),
     )
+    p.add_argument(
+        "--paper-capital",
+        type=float,
+        default=100000.0,
+        dest="paper_capital",
+        help=(
+            "Initial capital (KRW) for paper trading (default: 100,000). "
+            "Ignored in live mode — actual exchange balance is used."
+        ),
+    )
+    p.add_argument(
+        "--top-symbols",
+        type=int,
+        default=0,
+        dest="top_symbols",
+        help=(
+            "Dynamically track top-N symbols by 24h trading volume (default: 0 = disabled). "
+            "When set, --symbols is used only for startup validation; "
+            "the engine manages the universe via auto-refresh every 10 min."
+        ),
+    )
+    p.add_argument(
+        "--exclude-symbols",
+        nargs="+",
+        default=[],
+        dest="exclude_symbols",
+        metavar="SYMBOL",
+        help="Symbols to never trade (blacklist). e.g. --exclude-symbols DOGE/KRW ELSA/KRW",
+    )
     return p
 
 
@@ -230,7 +259,7 @@ def main() -> None:
             logger.warning("Failed to fetch balance, using default capital", error=str(exc))
             initial_capital = Decimal("10000")
     else:
-        initial_capital = Decimal("10000")
+        initial_capital = Decimal(str(int(args.paper_capital)))
     position_store = SQLitePositionStore()
     portfolio = PortfolioTracker.from_store(initial_cash=initial_capital, store=position_store)
 
@@ -353,6 +382,9 @@ def main() -> None:
     )
     if args.trailing_stop_pct is not None:
         engine.trailing_stop_pct = args.trailing_stop_pct
+    if args.exclude_symbols:
+        engine.symbol_blacklist = args.exclude_symbols
+        logger.info("Symbol blacklist applied", excluded=args.exclude_symbols)
 
     # ── Web Dashboard ─────────────────────────────────────────────────────────
     dashboard_port = args.dashboard_port or settings.dashboard_port
@@ -399,6 +431,7 @@ def main() -> None:
             symbols=args.symbols,
             interval_seconds=args.interval,
             heartbeat_interval=args.heartbeat_interval or None,
+            pin_symbols=(args.top_symbols == 0),
         )
     finally:
         prevent_sleep.disable()

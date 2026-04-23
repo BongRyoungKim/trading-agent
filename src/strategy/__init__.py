@@ -8,6 +8,8 @@ from src.strategy.registry import get_strategy, list_strategies, register
 from src.strategy.rsi_momentum import RSIMomentumStrategy
 from src.strategy.rsi_strategy import RSIStrategy
 from src.strategy.scalping_5m import Scalping5mStrategy
+from src.strategy.mean_reversion import MeanReversionStrategy
+from src.strategy.swing_momentum import SwingMomentumStrategy
 from src.strategy.vwap_strategy import VWAPStrategy
 
 __all__ = [
@@ -21,6 +23,8 @@ __all__ = [
     "MomentumStrategy",
     "RSIMomentumStrategy",
     "Scalping5mStrategy",
+    "MeanReversionStrategy",
+    "SwingMomentumStrategy",
     "register",
     "get_strategy",
     "list_strategies",

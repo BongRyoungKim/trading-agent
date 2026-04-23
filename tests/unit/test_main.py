@@ -75,11 +75,11 @@ class TestMain:
         engine, _ = _run_main([])
         engine.start.assert_called_once()
 
-    def test_default_symbol_is_btc_usdt(self):
+    def test_default_symbol_is_btc_krw(self):
         engine, _ = _run_main([])
         call_args = engine.start.call_args
         symbols = call_args[1].get("symbols") or call_args[0][0]
-        assert "BTC/USDT" in symbols
+        assert "BTC/KRW" in symbols
 
     def test_custom_symbols(self):
         engine, _ = _run_main(["--symbols", "ETH/USDT", "BNB/USDT"])

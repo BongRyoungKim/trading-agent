@@ -46,7 +46,8 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Claude Code (v6 Post-Dev Workflow)
-.claude/handoff.md
-.claude/checkpoints/
-.claude/web-checklist-state.json
+# Claude Code
+.claude/
+
+# Generated reports (runtime output)
+reports/

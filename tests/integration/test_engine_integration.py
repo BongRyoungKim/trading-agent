@@ -71,7 +71,7 @@ def _make_sell_df() -> pd.DataFrame:
 
 def _make_ticker(price: float) -> MagicMock:
     t = MagicMock()
-    t.last_price = Decimal(str(price))
+    t.last = Decimal(str(price))
     return t
 
 

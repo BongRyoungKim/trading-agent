@@ -92,8 +92,10 @@ class TradingEngine:
         self._tick_callbacks: list = []  # called with tick dict after each evaluation
         self._sync_anchor: str = ""  # first symbol in the list — triggers KRW sync
         self._tick_symbols: set[str] = set()  # currently scheduled tick symbols
+        self._pinned_symbols: frozenset[str] = frozenset()  # user-specified symbols; if non-empty, auto-refresh cannot add/remove them
         self._tick_interval: int = 60  # stored at start() for dynamic symbol additions
         self._ranked_symbols: list[str] = []  # 24h vol-ranked order from last refresh
+        self._symbol_blacklist: frozenset[str] = frozenset()  # symbols never traded
         self._journal = (
             TradeJournal.from_store(journal_store)
             if journal_store is not None
@@ -158,6 +160,15 @@ class TradingEngine:
     @trailing_stop_pct.setter
     def trailing_stop_pct(self, value: float | Decimal | None) -> None:
         self._trailing_stop_pct = Decimal(str(value)) if value is not None else None
+
+    @property
+    def symbol_blacklist(self) -> frozenset[str]:
+        return self._symbol_blacklist
+
+    @symbol_blacklist.setter
+    def symbol_blacklist(self, symbols: list[str] | set[str] | frozenset[str]) -> None:
+        self._symbol_blacklist = frozenset(symbols)
+        logger.info("Symbol blacklist updated", blacklist=sorted(self._symbol_blacklist))
 
     def _check_exit_conditions(self, symbol: str) -> bool:
         """
@@ -235,9 +246,10 @@ class TradingEngine:
             self._notify_close(symbol, price, reason="take_profit")
             return True
 
-        # ── time-based stop — cut losers after 45 min ─────────────────────
+        # ── time-based stop — cut losers after 60 min at -0.5% ────────────
+        # Widened from 45 min / -0.3% to match the wider 1.5% SL regime.
         hold_min = (datetime.now(UTC) - pos.entry_time).total_seconds() / 60
-        if hold_min >= 45 and price < pos.entry_price * Decimal("0.997"):
+        if hold_min >= 60 and price < pos.entry_price * Decimal("0.995"):
             logger.info(
                 "Time-stop triggered — position losing after 45 min",
                 symbol=symbol,
@@ -315,6 +327,7 @@ class TradingEngine:
         interval_seconds: int = 60,
         daily_report_hour: int | None = 0,
         heartbeat_interval: int | None = 3600,
+        pin_symbols: bool = True,
     ) -> None:
         """
         Start the scheduler and block until stop() is called or a termination
@@ -327,11 +340,16 @@ class TradingEngine:
                                  None disables the daily report job.
             heartbeat_interval:  Seconds between Telegram heartbeat messages.
                                  None disables heartbeats.
+            pin_symbols:         If False, auto-refresh can freely add/remove symbols.
+                                 Use with --top-symbols for dynamic universe tracking.
         """
         self._initial_capital = self._portfolio.cash
         self._start_time = time.monotonic()
         self._tick_interval = interval_seconds
         self._tick_symbols = set(symbols)
+        if pin_symbols:
+            self._pinned_symbols = frozenset(symbols)
+        # else: _pinned_symbols stays frozenset() — auto-refresh manages universe freely
         self._sync_anchor = symbols[0] if symbols else ""
 
         logger.info(
@@ -497,6 +515,9 @@ class TradingEngine:
 
         has_pos = self._portfolio.has_position(symbol)
         if signal_.action == SignalAction.BUY and not has_pos:
+            if symbol in self._symbol_blacklist:
+                logger.debug("Symbol blacklisted — buy skipped", symbol=symbol)
+                return
             if self._portfolio.cash < Decimal("10000"):
                 logger.info(
                     "Cash < 10,000 KRW — buy cancelled until next evaluation",
@@ -516,16 +537,26 @@ class TradingEngine:
             finally:
                 self._buy_lock.release()
         elif signal_.action == SignalAction.SELL and has_pos:
-            # Minimum hold time: ignore signal SELL if position is younger than 10 minutes
             pos = self._portfolio.get_position(symbol)
             hold_seconds = (datetime.now(UTC) - pos.entry_time).total_seconds()
-            if hold_seconds < 600:
+            if hold_seconds < 1800:  # 30 min minimum hold
                 logger.debug(
-                    "Signal SELL suppressed — minimum hold time not reached",
+                    "Signal SELL suppressed — min hold time not reached",
                     symbol=symbol,
                     hold_seconds=int(hold_seconds),
                 )
                 return
+            # Only exit on signal if unrealized gain covers commissions (>= 0.3%)
+            current_price = signal_.metadata.get("price") if signal_.metadata else None
+            if current_price is not None:
+                unrealized_pct = (float(current_price) - float(pos.entry_price)) / float(pos.entry_price) * 100
+                if unrealized_pct < 0.3:
+                    logger.debug(
+                        "Signal SELL suppressed — below min profit threshold",
+                        symbol=symbol,
+                        unrealized_pct=round(unrealized_pct, 2),
+                    )
+                    return
             self._close_position(symbol)
 
     # ── Internal: order execution ─────────────────────────────────────────────
@@ -534,19 +565,27 @@ class TradingEngine:
         ticker = self._exchange.get_ticker(symbol)
         price = ticker.last
 
-        # ATR-based SL: 1×ATR, hard-capped at 0.8% below entry.
-        # Tighter SL → smaller losses → better RR ratio.
+        # ATR-based SL: 2.0×ATR, clamped to [1.5%, 3.0%] range below entry.
+        # MeanReversionStrategy (15m) fix: BTC 15m ATR is ~0.3-0.5% of price, so
+        # ATR×1.5 gave SL at only ~0.49% — triggered by noise, not real trend reversal.
+        # Dual clamp:
+        #   sl_ceiling (min distance 1.5%): prevents noise stops on low-ATR coins like BTC
+        #   sl_floor   (max distance 3.0%): caps max loss per trade (relaxed from 2.5%)
         atr_val = signal_.metadata.get("atr") if signal_ and signal_.metadata else None
         stop_loss = self._risk_manager.calculate_stop_loss(
             price, side="buy",
             atr_value=float(atr_val) if atr_val else None,
-            atr_multiplier=1.0,
+            atr_multiplier=2.0,
         )
-        # Hard cap: SL no more than 0.8% below entry price.
-        sl_floor = price * Decimal("0.992")
+        sl_ceiling = price * Decimal("0.985")   # SL no closer than 1.5% (noise guard)
+        sl_floor   = price * Decimal("0.970")   # SL no farther than 3.0% (loss cap)
+        if stop_loss > sl_ceiling:
+            stop_loss = sl_ceiling
         if stop_loss < sl_floor:
             stop_loss = sl_floor
-        # Take profit: 2× SL distance (2:1 RR, no artificial floor).
+        # Take profit: 2× SL distance (2:1 RR).
+        # SL range 1.5-2.5% → TP range 3-5%. Achievable for mean reversion bounces.
+        # Trailing stop (--trailing-stop-pct 1.5) locks profits on the bounce.
         sl_distance = price - stop_loss
         tp_distance = sl_distance * Decimal("2")
         take_profit = price + tp_distance
@@ -739,7 +778,44 @@ class TradingEngine:
                     f"InsufficientFunds for {symbol}: tracked={float(sell_amount):.4f}, "
                     f"actual={float(actual):.4f} — retrying with actual balance",
                 )
-                order = self._exchange.place_order(symbol, "sell", actual)
+                try:
+                    order = self._exchange.place_order(symbol, "sell", actual)
+                except Exception as retry_exc:
+                    # Retry also failed — re-sync to check if coins are now gone
+                    actual2 = self.sync_position_amount(symbol)
+                    if actual2 is not None and actual2 <= 0:
+                        logger.error(
+                            f"Retry sell failed and zero balance confirmed — removing ghost position | symbol={symbol}",
+                        )
+                        self._telegram.send_risk_alert(
+                            f"⚠️ {symbol} 잔고 0 확인 — 고스트 포지션 제거. 거래소 계좌를 확인하세요."
+                        )
+                        pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
+                        self._risk_manager.on_position_closed(pnl)
+                        self._journal.record(
+                            TradeRecord(
+                                symbol=symbol,
+                                side=position.side,
+                                amount=position.amount,
+                                entry_price=position.entry_price,
+                                exit_price=price,
+                                entry_time=position.entry_time,
+                                exit_time=datetime.now(UTC),
+                                pnl=pnl,
+                                commission=Decimal("0"),
+                                reason="ghost_removed",
+                            )
+                        )
+                        return
+                    logger.error(
+                        f"Retry sell also failed: {retry_exc} — position kept, retrying next tick "
+                        f"| symbol={symbol} amount={float(actual):.4f}",
+                    )
+                    self._telegram.send_risk_alert(
+                        f"⚠️ Retry sell failed for {symbol}: {retry_exc}. "
+                        "Position kept — will retry on next tick."
+                    )
+                    return
                 sell_amount = actual
             except Exception as exc:
                 # Keep position in tracking and retry on the next tick.
@@ -862,7 +938,13 @@ class TradingEngine:
             logger.warning(f"Symbol refresh failed: {exc}")
             return
 
-        new_set = set(new_top)
+        new_set = set(new_top) - self._symbol_blacklist
+
+        # If user pinned specific symbols, auto-refresh cannot add or remove them.
+        # new_set becomes exactly the pinned set, so added/dropped are always empty.
+        if self._pinned_symbols:
+            new_set = set(self._pinned_symbols) - self._symbol_blacklist
+
         added = new_set - self._tick_symbols
         dropped = self._tick_symbols - new_set
 
@@ -912,7 +994,35 @@ class TradingEngine:
     # ── Internal: daily report ────────────────────────────────────────────────
 
     def _send_daily_report(self) -> None:
-        """Scheduled job: send Telegram daily PnL summary."""
+        """Scheduled job: send Telegram daily PnL summary and save Markdown report file."""
+        # 1. Save Markdown report file + run scheduled tasks
+        try:
+            from src.report.generator import DailyReportGenerator  # noqa: PLC0415
+            journal_path = getattr(self._journal, "_store", None)
+            db_path = (
+                str(getattr(journal_path, "_db_path", "data/journal.db"))
+                if journal_path is not None
+                else "data/journal.db"
+            )
+            symbols = list(self._pinned_symbols) or list(self._tick_symbols)
+            gen = DailyReportGenerator(
+                journal_path=db_path, symbols=symbols or None, run_tasks=True
+            )
+            report_path = gen.generate()
+            logger.info("Daily Markdown report saved", path=str(report_path))
+
+            # 실행된 작업이 있으면 Telegram으로 별도 알림
+            executed = [r for r in gen.last_task_results if r.status == "executed"]
+            if executed and self._telegram.is_enabled:
+                lines = ["📋 <b>향후 과제 자동 실행 결과</b>", ""]
+                for r in executed:
+                    lines.append(r.to_telegram())
+                    lines.append("")
+                self._telegram.send("\n".join(lines))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to save daily Markdown report", error=str(exc))
+
+        # 2. Send Telegram summary
         try:
             report = self._portfolio.pnl_report()
             stats = self._journal.stats()
@@ -927,7 +1037,7 @@ class TradingEngine:
                 win_rate=stats["win_rate_pct"],
             )
         except Exception as exc:  # noqa: BLE001
-            logger.error("Failed to send daily report", error=str(exc))
+            logger.error("Failed to send daily Telegram report", error=str(exc))
 
     # ── Internal: strategy resolution ────────────────────────────────────────
 

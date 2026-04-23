@@ -182,7 +182,7 @@ class TestEngineTrailingStop:
 
         # Mock: price rises to 55000
         ticker = MagicMock()
-        ticker.last_price = Decimal("55000")
+        ticker.last = Decimal("55000")
         ticker.volume = Decimal("1000")
         engine._exchange.get_ticker.return_value = ticker
 
@@ -209,7 +209,7 @@ class TestEngineTrailingStop:
 
         # Price drops to 48000 — new trail would be 47040 < current 49000
         ticker = MagicMock()
-        ticker.last_price = Decimal("48000")
+        ticker.last = Decimal("48000")
         ticker.volume = Decimal("1000")
         engine._exchange.get_ticker.return_value = ticker
 
@@ -235,7 +235,7 @@ class TestEngineTrailingStop:
 
         # First tick: price rises to 55000 → stop ratchets to 53900
         ticker = MagicMock()
-        ticker.last_price = Decimal("55000")
+        ticker.last = Decimal("55000")
         ticker.volume = Decimal("1000")
         engine._exchange.get_ticker.return_value = ticker
         signal_mock = MagicMock()
@@ -250,7 +250,7 @@ class TestEngineTrailingStop:
         assert pos.stop_loss == expected_stop
 
         # Second tick: price drops to 53000 < 53900 → stop-loss triggered
-        ticker.last_price = Decimal("53000")
+        ticker.last = Decimal("53000")
         engine._process_symbol("BTC/USDT")
         assert not portfolio.has_position("BTC/USDT")
 
@@ -264,7 +264,7 @@ class TestEngineTrailingStop:
         )
 
         ticker = MagicMock()
-        ticker.last_price = Decimal("55000")
+        ticker.last = Decimal("55000")
         ticker.volume = Decimal("1000")
         engine._exchange.get_ticker.return_value = ticker
         signal_mock = MagicMock()
