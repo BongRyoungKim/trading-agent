@@ -241,6 +241,7 @@ async function refresh() {{
     renderEquity(eq);
     renderBalance(bal);
     renderStrategy(strat);
+    (ticks || []).forEach(t => {{ _ticksMap[t.symbol] = t; }});
     renderTicks(ticks);
     renderPositions(pos);
     renderBuyHistory(trades);
