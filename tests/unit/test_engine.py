@@ -206,7 +206,7 @@ class TestProcessSymbol:
         strategy.generate_signal.return_value = _make_signal(SignalAction.SELL)
         portfolio.has_position.return_value = True
         # Position must be older than 10-min minimum hold time for SELL to trigger
-        pos = _make_position_mock(entry_time=datetime.now(UTC) - timedelta(minutes=15))
+        pos = _make_position_mock(entry_time=datetime.now(UTC) - timedelta(minutes=35))
         portfolio.get_position.return_value = pos
         with patch.object(engine, "_close_position") as mock_close:
             engine._process_symbol("BTC/USDT")

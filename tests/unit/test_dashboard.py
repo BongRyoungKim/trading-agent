@@ -154,7 +154,7 @@ class TestRenderDashboard:
 
     def test_html_no_positions_shows_empty_message(self) -> None:
         html = render_dashboard(self._status(), [], {})
-        assert "No open positions" in html
+        assert "오픈 포지션 없음" in html
 
     def test_html_shows_position_symbol(self) -> None:
         positions = [{

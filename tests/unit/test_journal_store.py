@@ -25,6 +25,7 @@ def _trade(
     amount: float = 0.01,
     reason: str = "signal",
     exit_time: datetime | None = None,
+    seq: int = 0,
 ) -> TradeRecord:
     return TradeRecord(
         symbol=symbol,
@@ -33,7 +34,7 @@ def _trade(
         entry_price=Decimal(str(entry)),
         exit_price=Decimal(str(exit_)),
         entry_time=_T0,
-        exit_time=exit_time or _T1,
+        exit_time=exit_time or (_T1 + timedelta(seconds=seq)),
         pnl=Decimal(str(pnl)),
         commission=Decimal("0.5"),
         reason=reason,
@@ -140,8 +141,8 @@ class TestStorePersistence:
     def test_trades_survive_store_reload(self, tmp_path: Path):
         db_path = tmp_path / "journal.db"
         store1 = SQLiteJournalStore(db_path=db_path)
-        store1.save(_trade(pnl=200.0))
-        store1.save(_trade(pnl=-50.0))
+        store1.save(_trade(pnl=200.0, seq=0))
+        store1.save(_trade(pnl=-50.0, seq=1))
 
         # Create new instance pointing to same file
         store2 = SQLiteJournalStore(db_path=db_path)
@@ -161,8 +162,8 @@ class TestJournalWithStore:
     def test_from_store_loads_history(self, tmp_path: Path):
         db_path = tmp_path / "j.db"
         store = SQLiteJournalStore(db_path=db_path)
-        store.save(_trade(pnl=100.0))
-        store.save(_trade(pnl=-30.0))
+        store.save(_trade(pnl=100.0, seq=0))
+        store.save(_trade(pnl=-30.0, seq=1))
 
         # Load into new journal
         journal = TradeJournal.from_store(store)
@@ -171,8 +172,8 @@ class TestJournalWithStore:
     def test_from_store_stats_include_history(self, tmp_path: Path):
         db_path = tmp_path / "j.db"
         store = SQLiteJournalStore(db_path=db_path)
-        store.save(_trade(pnl=100.0))
-        store.save(_trade(pnl=-50.0))
+        store.save(_trade(pnl=100.0, seq=0))
+        store.save(_trade(pnl=-50.0, seq=1))
 
         journal = TradeJournal.from_store(store)
         stats = journal.stats()
@@ -205,15 +206,15 @@ class TestJournalWithStore:
         # Session 1: 3 wins, 1 loss
         store1 = SQLiteJournalStore(db_path=db_path)
         j1 = TradeJournal.from_store(store1)
-        j1.record(_trade(pnl=100.0))
-        j1.record(_trade(pnl=200.0))
-        j1.record(_trade(pnl=150.0))
-        j1.record(_trade(pnl=-80.0))
+        j1.record(_trade(pnl=100.0, seq=0))
+        j1.record(_trade(pnl=200.0, seq=1))
+        j1.record(_trade(pnl=150.0, seq=2))
+        j1.record(_trade(pnl=-80.0, seq=3))
 
         # Session 2: reload + 1 more win
         store2 = SQLiteJournalStore(db_path=db_path)
         j2 = TradeJournal.from_store(store2)
-        j2.record(_trade(pnl=50.0))
+        j2.record(_trade(pnl=50.0, seq=4))
 
         stats = j2.stats()
         assert stats["total_trades"] == 5

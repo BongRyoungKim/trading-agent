@@ -27,6 +27,8 @@ def _make_engine(telegram=None):
     risk_manager = RiskManager(settings, risk_state)
 
     tg = telegram if telegram is not None else MagicMock()
+    if isinstance(tg, MagicMock):
+        tg._hourly_summary = False
 
     return TradingEngine(
         settings=settings,

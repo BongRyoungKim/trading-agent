@@ -163,7 +163,7 @@ class TelegramClient:
     ) -> bool:
         emoji = "🟢" if side == "buy" else "🔴"
         line = f"{emoji} {side.upper()} <code>{symbol}</code> {amount:.6f} @ ₩{price:,.0f}"
-        if self._hourly_summary:
+        if getattr(self, '_hourly_summary', False):
             self._queue(line)
             return True
         text = (
@@ -188,7 +188,7 @@ class TelegramClient:
         emoji = "✅" if pnl >= 0 else "❌"
         sign = "+" if pnl >= 0 else ""
         line = f"{emoji} CLOSE <code>{symbol}</code> {sign}₩{pnl:,.0f} ({sign}{pnl_pct:.2f}%)"
-        if self._hourly_summary:
+        if getattr(self, '_hourly_summary', False):
             self._queue(line)
             return True
         text = (
@@ -200,13 +200,13 @@ class TelegramClient:
         return self.send(text)
 
     def send_risk_alert(self, message: str) -> bool:
-        if self._hourly_summary:
+        if getattr(self, '_hourly_summary', False):
             self._queue(f"⚠️ {message}")
             return True
         return self.send(f"⚠️ <b>RISK ALERT</b>\n{message}")
 
     def send_error(self, error: str, context: str = "") -> bool:
-        if self._hourly_summary:
+        if getattr(self, '_hourly_summary', False):
             ctx = f"[{context}] " if context else ""
             self._queue(f"🚨 {ctx}{error[:80]}")
             return True
@@ -217,7 +217,7 @@ class TelegramClient:
         return self.send(text)
 
     def send_startup(self, mode: str, exchange: str, symbols: list[str], strategy: str) -> bool:
-        if self._hourly_summary:
+        if getattr(self, '_hourly_summary', False):
             return True  # suppress
         text = (
             f"🚀 <b>Trading Agent Started</b>\n"
@@ -234,7 +234,7 @@ class TelegramClient:
         win_rate: float,
         realized_pnl: float,
     ) -> bool:
-        if self._hourly_summary:
+        if getattr(self, '_hourly_summary', False):
             return True  # suppress
         hours, rem = divmod(int(session_seconds), 3600)
         minutes = rem // 60
@@ -255,7 +255,7 @@ class TelegramClient:
         total_trades: int,
         win_rate: float,
     ) -> bool:
-        if self._hourly_summary:
+        if getattr(self, '_hourly_summary', False):
             return True  # suppress — covered by hourly summary
         pnl_pct = (realized_pnl / initial_capital * 100) if initial_capital else 0.0
         sign = "+" if realized_pnl >= 0 else ""
@@ -268,7 +268,7 @@ class TelegramClient:
         )
 
     def send_heartbeat(self, open_positions: int, cash: float, circuit_state: str) -> bool:
-        if self._hourly_summary:
+        if getattr(self, '_hourly_summary', False):
             return True  # suppress — replaced by flush_summary
         state_emoji = "🟢" if circuit_state == "CLOSED" else "🔴"
         return self.send(

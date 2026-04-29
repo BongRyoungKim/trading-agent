@@ -102,6 +102,14 @@ class TestTradingDays:
         assert cfg.is_trading_time(_dt(5, 12)) is True   # Saturday
         assert cfg.is_trading_time(_dt(0, 12)) is False  # Monday
 
+    def test_wraparound_days_fri_mon(self) -> None:
+        cfg = self._cfg("fri-mon")
+        assert cfg.is_trading_time(_dt(4, 12)) is True   # Friday
+        assert cfg.is_trading_time(_dt(5, 12)) is True   # Saturday
+        assert cfg.is_trading_time(_dt(6, 12)) is True   # Sunday
+        assert cfg.is_trading_time(_dt(0, 12)) is True   # Monday
+        assert cfg.is_trading_time(_dt(2, 12)) is False  # Wednesday
+
 
 # ── Validation errors ─────────────────────────────────────────────────────────
 
@@ -121,6 +129,10 @@ class TestValidation:
     def test_start_equals_end_raises(self) -> None:
         with pytest.raises(ValueError, match="before end"):
             MarketHoursConfig(enabled=True, trading_hours="09:00-09:00")
+
+    def test_time_value_out_of_range_raises(self) -> None:
+        with pytest.raises(ValueError):
+            MarketHoursConfig(enabled=True, trading_hours="25:00-26:00")
 
 
 # ── market_hours_from_settings ────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 """Unit tests for src/status_cli.py."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -40,7 +40,7 @@ def _pos(symbol: str = "BTC/USDT", entry: float = 50000.0,
 
 
 def _trade(symbol: str = "BTC/USDT", pnl: float = 100.0,
-           reason: str = "signal") -> TradeRecord:
+           reason: str = "signal", seq: int = 0) -> TradeRecord:
     return TradeRecord(
         symbol=symbol,
         side="buy",
@@ -48,7 +48,7 @@ def _trade(symbol: str = "BTC/USDT", pnl: float = 100.0,
         entry_price=Decimal("50000"),
         exit_price=Decimal("51000"),
         entry_time=_T0,
-        exit_time=_T1,
+        exit_time=_T1 + timedelta(seconds=seq),
         pnl=Decimal(str(pnl)),
         commission=Decimal("0"),
         reason=reason,
@@ -166,7 +166,7 @@ class TestCmdTrades:
     def test_respects_n_limit(self, journal_db, capsys):
         store = SQLiteJournalStore(db_path=journal_db)
         for i in range(25):
-            store.save(_trade(pnl=float(i + 1)))
+            store.save(_trade(pnl=float(i + 1), seq=i))
         cmd_trades(journal_db, n=5)
         out = capsys.readouterr().out
         # Should show "last 5 of 25 total"
@@ -206,25 +206,25 @@ class TestCmdStats:
 
     def test_shows_win_rate(self, journal_db, capsys):
         store = SQLiteJournalStore(db_path=journal_db)
-        store.save(_trade(pnl=100.0))
-        store.save(_trade(pnl=100.0))
-        store.save(_trade(pnl=-50.0))
+        store.save(_trade(pnl=100.0, seq=0))
+        store.save(_trade(pnl=100.0, seq=1))
+        store.save(_trade(pnl=-50.0, seq=2))
         cmd_stats(journal_db)
         out = capsys.readouterr().out
         assert "66.67" in out  # 2/3 win rate
 
     def test_shows_profit_factor(self, journal_db, capsys):
         store = SQLiteJournalStore(db_path=journal_db)
-        store.save(_trade(pnl=200.0))
-        store.save(_trade(pnl=-100.0))
+        store.save(_trade(pnl=200.0, seq=0))
+        store.save(_trade(pnl=-100.0, seq=1))
         cmd_stats(journal_db)
         out = capsys.readouterr().out
         assert "2.0" in out
 
     def test_shows_total_trades(self, journal_db, capsys):
         store = SQLiteJournalStore(db_path=journal_db)
-        for _ in range(7):
-            store.save(_trade())
+        for i in range(7):
+            store.save(_trade(seq=i))
         cmd_stats(journal_db)
         assert "7" in capsys.readouterr().out
 
@@ -286,7 +286,7 @@ class TestStatusCliMain:
         jrn_db = str(tmp_path / "j.db")
         store = SQLiteJournalStore(db_path=jrn_db)
         for i in range(10):
-            store.save(_trade(pnl=float(i + 1)))
+            store.save(_trade(pnl=float(i + 1), seq=i))
         main(["--journal-db", jrn_db, "--pos-db", str(tmp_path / "p.db"), "trades", "-n", "3"])
         out = capsys.readouterr().out
         assert "3" in out

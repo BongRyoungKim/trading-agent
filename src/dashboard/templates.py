@@ -33,6 +33,7 @@ def render_dashboard(
     circuit_badge = _badge(circuit, "#ef4444" if circuit != "CLOSED" else "#10b981")
     mode_badge = _badge(mode, "#6366f1")
     hours_info = f"{trading_hours} UTC | Days: {trading_days}"
+    mode_switch_html = _render_mode_switch_btn(mode)
 
     equity_svg = _render_equity_svg(equity)
     stats_html = _render_stats(stats)
@@ -90,6 +91,9 @@ def render_dashboard(
     button{{padding:.55rem 1.3rem;border:none;border-radius:.4rem;font-weight:600;cursor:pointer;font-size:.875rem;transition:opacity .15s}}
     button:hover{{opacity:.85}}
     .btn-pause{{background:#f59e0b;color:#000}}.btn-resume{{background:#10b981;color:#000}}
+    .btn-live{{background:#10b981;color:#000}}.btn-to-paper{{background:#6366f1;color:#fff}}
+    .btn-locked{{background:#1e293b;color:#475569;cursor:not-allowed;border:1px solid #334155}}
+    .mode-switch{{margin-top:1rem;border-top:1px solid #334155;padding-top:.9rem}}
     /* Strategy criteria */
     .criteria-grid{{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:.5rem}}
     .criteria-col h3{{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem}}
@@ -139,6 +143,7 @@ def render_dashboard(
       <div class="stat-row"><span class="stat-label">상태</span>{state_badge}</div>
       <div class="stat-row"><span class="stat-label">서킷 브레이커</span>{circuit_badge}</div>
       <div class="stat-row"><span class="stat-label">거래 시간</span><span class="stat-value" style="font-size:.78rem;color:#94a3b8">{hours_info}</span></div>
+      {mode_switch_html}
     </div>
     {pnl_html}
   </div>
@@ -351,7 +356,52 @@ function renderStatus(s) {{
       <span style="color:#64748b;font-size:.75rem">서킷 브레이커</span>
       <span style="color:${{circuitColor}};font-weight:600;font-size:.8rem">${{circuitIcon}} ${{circuit}}</span>
     </div>
-    <div style="color:#475569;font-size:.7rem;text-align:right">${{hours}} UTC · ${{days}}</div>`;
+    <div style="color:#475569;font-size:.7rem;text-align:right">${{hours}} UTC · ${{days}}</div>
+    ${{renderModeSwitchBtn(mode)}}`;
+}}
+function renderModeSwitchBtn(mode) {{
+  const unlockDate = new Date('2026-04-30T00:00:00+09:00');
+  const now = new Date();
+  const unlocked = now >= unlockDate;
+  const diffMs = unlockDate - now;
+  const diffDays = Math.ceil(diffMs / 86400000);
+
+  if (mode === 'LIVE') {{
+    return `<div class="mode-switch">
+      <button class="btn-to-paper" onclick="switchMode('paper')" style="width:100%">📋 PAPER 모드로 전환</button>
+    </div>`;
+  }}
+  if (!unlocked) {{
+    return `<div class="mode-switch">
+      <button class="btn-locked" disabled style="width:100%">🔒 LIVE 전환 — D-${{diffDays}} (4/30 활성화)</button>
+    </div>`;
+  }}
+  return `<div class="mode-switch">
+    <button class="btn-live" onclick="switchMode('live')" style="width:100%">⚡ LIVE 모드로 전환</button>
+  </div>`;
+}}
+async function switchMode(targetMode) {{
+  const label = targetMode === 'live' ? 'LIVE' : 'PAPER';
+  const warn  = targetMode === 'live'
+    ? '⚠️ LIVE 모드로 전환하면 실제 자산으로 거래됩니다.\\n정말 전환하시겠습니까?'
+    : 'PAPER 모드로 전환합니다. 실거래가 중단됩니다.\\n계속하시겠습니까?';
+  if (!confirm(warn)) return;
+  try {{
+    const res = await fetch('/api/engine/set-mode', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{mode: targetMode}}),
+    }});
+    const data = await res.json();
+    if (data.success) {{
+      showToast(`${{label}} 모드 전환 중... 10초 후 재연결됩니다.`);
+      setTimeout(() => location.reload(), 12000);
+    }} else {{
+      showToast('전환 실패: ' + data.message, true);
+    }}
+  }} catch(e) {{
+    showToast('오류: ' + e.message, true);
+  }}
 }}
 function renderPnl(pnl) {{
   const el = document.getElementById('pnl-card');
@@ -1252,6 +1302,38 @@ def _render_buy_history(trades: list[dict], positions: list[dict] | None = None)
         "<table><thead><tr>"
         "<th>매수 시각</th><th>종목</th><th>수량</th><th>매수가</th><th>매수 금액</th><th>상태</th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+    )
+
+
+def _render_mode_switch_btn(mode: str) -> str:
+    """Server-side render of the mode switch button (shown on initial page load)."""
+    import math
+    from datetime import datetime, timedelta, timezone
+
+    kst = timezone(timedelta(hours=9))
+    unlock_dt = datetime(2026, 4, 30, 0, 0, 0, tzinfo=kst)
+    now = datetime.now(tz=kst)
+    unlocked = now >= unlock_dt
+
+    if mode.upper() == "LIVE":
+        return (
+            '<div class="mode-switch">'
+            '<button class="btn-to-paper" onclick="switchMode(\'paper\')" style="width:100%">'
+            "📋 PAPER 모드로 전환</button></div>"
+        )
+
+    if not unlocked:
+        diff_days = math.ceil((unlock_dt - now).total_seconds() / 86400)
+        return (
+            f'<div class="mode-switch">'
+            f'<button class="btn-locked" disabled style="width:100%">'
+            f"🔒 LIVE 전환 — D-{diff_days} (4/30 활성화)</button></div>"
+        )
+
+    return (
+        '<div class="mode-switch">'
+        '<button class="btn-live" onclick="switchMode(\'live\')" style="width:100%">'
+        "⚡ LIVE 모드로 전환</button></div>"
     )
 
 

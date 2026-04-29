@@ -116,7 +116,7 @@ class TradeJournal:
         win_rate = len(wins) / len(self._trades) * 100
         avg_win = float(total_win / len(wins)) if wins else 0.0
         avg_loss = float(total_loss / len(losses)) if losses else 0.0
-        profit_factor = float(total_win / total_loss) if total_loss > 0 else 9999.0
+        profit_factor = float(total_win / total_loss) if total_loss > 0 else float("inf")
 
         return {
             "total_trades": len(self._trades),

@@ -1,4 +1,4 @@
-$workDir     = 'C:\Users\Coop220426-4\Project\Trading_Agent'
+﻿$workDir     = 'C:\Users\Coop220426-4\Project\Trading_Agent'
 $guardianLog = Join-Path $workDir 'logs\guardian.log'
 $watchdogScript = Join-Path $workDir 'start_agent_watchdog.ps1'
 

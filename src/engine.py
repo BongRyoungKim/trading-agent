@@ -1213,7 +1213,7 @@ class TradingEngine:
                 realized_pnl=report["realized_pnl"],
                 circuit=circuit_state,
             )
-            if self._telegram._hourly_summary:  # noqa: SLF001
+            if getattr(self._telegram, '_hourly_summary', False):
                 # Build per-position detail with live prices
                 positions_detail: list[dict] = []
                 for sym in self._portfolio.open_symbols():

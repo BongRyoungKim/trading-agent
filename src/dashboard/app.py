@@ -17,12 +17,15 @@ from __future__ import annotations
 import asyncio
 import json
 import queue as stdlib_queue
+from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from src.dashboard.state import get_dashboard_state
 from src.dashboard.templates import render_dashboard
+
+_MODE_FILE = Path(__file__).parent.parent.parent / ".trading_mode"
 
 app = FastAPI(title="Trading Agent Dashboard", docs_url=None, redoc_url=None)
 
@@ -139,3 +142,32 @@ async def resume_engine() -> JSONResponse:
         return JSONResponse({"success": False, "message": "Engine not registered"}, status_code=503)
     state.resume()
     return JSONResponse({"success": True, "message": "Engine resumed"})
+
+
+@app.post("/api/engine/set-mode")
+async def set_mode(request: Request) -> JSONResponse:
+    """Switch trading mode (paper ↔ live). Writes .trading_mode and stops engine.
+    Watchdog will restart automatically with the new mode."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"success": False, "message": "Invalid JSON"}, status_code=400)
+
+    mode = body.get("mode", "").strip().lower()
+    if mode not in ("paper", "live"):
+        return JSONResponse({"success": False, "message": "mode must be 'paper' or 'live'"}, status_code=400)
+
+    _MODE_FILE.write_text(mode, encoding="utf-8")
+
+    state = get_dashboard_state()
+    if state.engine is not None:
+        state.engine.stop()
+
+    return JSONResponse({"success": True, "mode": mode, "message": f"{mode.upper()} 모드로 전환 중... 잠시 후 재연결됩니다."})
+
+
+@app.get("/api/engine/mode")
+async def get_mode() -> JSONResponse:
+    """Return current mode from .trading_mode file."""
+    mode = _MODE_FILE.read_text(encoding="utf-8").strip() if _MODE_FILE.exists() else "paper"
+    return JSONResponse({"mode": mode})

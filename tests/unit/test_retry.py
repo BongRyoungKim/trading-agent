@@ -102,3 +102,42 @@ class TestRetryAsync:
         result = await func()
         assert result == "ok"
         assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_async_raises_after_max_attempts(self) -> None:
+        @retry(max_attempts=3, base_delay=0.001, jitter=False)
+        async def func() -> None:
+            raise RateLimitError("always fails")
+
+        with pytest.raises(RateLimitError):
+            await func()
+
+    @pytest.mark.asyncio
+    async def test_async_jitter_applies(self) -> None:
+        call_count = 0
+
+        @retry(max_attempts=3, base_delay=0.001, jitter=True)
+        async def func() -> str:
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise RateLimitError("rate limited")
+            return "ok"
+
+        result = await func()
+        assert result == "ok"
+
+    def test_sync_jitter_applies(self) -> None:
+        call_count = 0
+
+        @retry(max_attempts=3, base_delay=0.001, jitter=True)
+        def func() -> str:
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise RateLimitError("rate limited")
+            return "ok"
+
+        with patch("time.sleep"):
+            result = func()
+        assert result == "ok"
