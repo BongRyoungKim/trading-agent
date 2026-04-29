@@ -166,11 +166,15 @@ class UpbitClient(BaseExchangeClient):
     @retry(max_attempts=3, base_delay=2.0)
     def get_top_symbols_by_volume(self, n: int = 20) -> list[str]:
         """
-        Return top N active KRW-market symbols ranked by 24h quote volume
-        (거래금액 = quoteVolume in KRW). Single fetch_tickers() call.
+        Return top N active KRW-market symbols ranked by 24h quote volume.
+        Fetches only KRW markets to avoid Upbit's URL length limit (HTTP 400)
+        that occurs when all BTC/KRW/USDT markets are passed in one request.
         """
         try:
-            tickers = self._exchange.fetch_tickers()
+            if not self._exchange.markets:
+                self._exchange.load_markets()
+            krw_symbols = [s for s in self._exchange.markets if s.endswith("/KRW")]
+            tickers = self._exchange.fetch_tickers(krw_symbols)
             ranked = sorted(
                 (
                     (sym, float(data.get("quoteVolume") or 0))
