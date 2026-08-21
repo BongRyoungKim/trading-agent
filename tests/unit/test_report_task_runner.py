@@ -51,11 +51,20 @@ def _mr_stats(total=0, wins=0, pnl=0.0, sl=0, tp=0, sig=0) -> dict:
 
 @pytest.fixture()
 def runner_env(tmp_path, monkeypatch):
-    """Set up patched report dirs and return (runner_factory, tmp_path)."""
+    """Set up patched report dirs and return (runner_factory, tmp_path).
+
+    Also redirects src.config.live_params' file paths into tmp_path so tests
+    never read/write the real .strategy_params.json / .restart_requested that
+    the live watchdog uses.
+    """
     import src.report.task_runner as tr
+    import src.config.live_params as lp
     monkeypatch.setattr(tr, 'REPORTS_DIR', tmp_path)
     monkeypatch.setattr(tr, 'REC_DIR', tmp_path / "rec")
     monkeypatch.setattr(tr, 'STATE_FILE', tmp_path / ".task_state.json")
+    monkeypatch.setattr(lp, 'PARAMS_FILE', tmp_path / ".strategy_params.json")
+    monkeypatch.setattr(lp, 'AUDIT_LOG', tmp_path / "param_change_log.jsonl")
+    monkeypatch.setattr(lp, 'RESTART_FLAG', tmp_path / ".restart_requested")
     (tmp_path / "rec").mkdir()
     return tmp_path
 
@@ -256,3 +265,92 @@ class TestScheduledTaskRunnerRun:
         results = runner.run(stats)
         sl_result = next((r for r in results if "sl_review" in r.task_id), None)
         assert sl_result is not None
+
+
+# ── Auto-apply (live_params integration) ────────────────────────────────────
+
+class TestAutoApply:
+    def test_wr_alert_applies_params_and_requests_restart(self, runner_env):
+        import src.config.live_params as lp
+        before = lp.load()["strategy_params"]
+
+        runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
+        stats = _mr_stats(total=15, wins=4, pnl=50.0, sig=8, sl=5, tp=2)
+        stats["wr_pct"] = 26.7
+        runner.run(stats)
+
+        after = lp.load()["strategy_params"]
+        assert after["mr_rsi_oversold_fast"] < before["mr_rsi_oversold_fast"]
+        assert after["mr_rsi_oversold_slow"] < before["mr_rsi_oversold_slow"]
+        assert after["mr_vol_mult"] > before["mr_vol_mult"]
+        assert lp.restart_requested()
+
+    def test_wr_alert_step_capped_to_20_percent(self, runner_env):
+        import src.config.live_params as lp
+        runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
+        stats = _mr_stats(total=15, wins=4, pnl=50.0, sig=8, sl=5, tp=2)
+        stats["wr_pct"] = 26.7
+        runner.run(stats)
+
+        after = lp.load()["strategy_params"]
+        # default mr_vol_mult 2.0 * 1.2 = 2.4 (within bound, not clamped)
+        assert after["mr_vol_mult"] == pytest.approx(2.4, abs=0.01)
+
+    def test_wr_alert_never_crosses_rsi_bounds(self, runner_env):
+        """Repeated firings must plateau at PARAM_BOUNDS, never exceed them."""
+        import src.config.live_params as lp
+        runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
+        stats = _mr_stats(total=15, wins=4, pnl=50.0, sig=8, sl=5, tp=2)
+        stats["wr_pct"] = 26.7
+        for i in range(30):
+            stats_i = dict(stats)
+            stats_i["total"] = 15 + i * 5  # advance the 5-trade dedup bucket
+            runner.run(stats_i)
+
+        after = lp.load()["strategy_params"]
+        fast_lo, fast_hi = lp.PARAM_BOUNDS["mr_rsi_oversold_fast"]
+        slow_lo, slow_hi = lp.PARAM_BOUNDS["mr_rsi_oversold_slow"]
+        vol_lo, vol_hi = lp.PARAM_BOUNDS["mr_vol_mult"]
+        assert fast_lo <= after["mr_rsi_oversold_fast"] <= fast_hi
+        assert slow_lo <= after["mr_rsi_oversold_slow"] <= slow_hi
+        assert vol_lo <= after["mr_vol_mult"] <= vol_hi
+        assert after["mr_rsi_oversold_fast"] < after["mr_rsi_oversold_slow"]
+
+    def test_pnl_alert_applies_tp_rr_multiplier(self, runner_env):
+        import src.config.live_params as lp
+        before = lp.load()["risk"]["tp_rr_multiplier"]
+
+        runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
+        stats = _mr_stats(total=12, wins=5, pnl=-2000.0, sig=6, sl=4, tp=2)
+        stats["wr_pct"] = 41.7
+        runner.run(stats)
+
+        after = lp.load()["risk"]["tp_rr_multiplier"]
+        assert after > before
+        assert lp.restart_requested()
+
+    def test_sl_review_applies_sl_floor_pct(self, runner_env):
+        import src.config.live_params as lp
+        before = lp.load()["risk"]["sl_floor_pct"]
+
+        runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
+        stats = _mr_stats(total=10, wins=4, pnl=0.0, sl=7, sig=2, tp=1)
+        stats["wr_pct"] = 40.0
+        runner.run(stats)
+
+        after = lp.load()["risk"]["sl_floor_pct"]
+        assert after > before
+        assert lp.restart_requested()
+
+    def test_audit_log_records_applied_changes(self, runner_env):
+        import src.config.live_params as lp
+        runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
+        stats = _mr_stats(total=10, wins=4, pnl=0.0, sl=7, sig=2, tp=1)
+        stats["wr_pct"] = 40.0
+        runner.run(stats)
+
+        assert lp.AUDIT_LOG.exists()
+        lines = lp.AUDIT_LOG.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) >= 1
+        entry = json.loads(lines[0])
+        assert {"date", "trigger", "param", "old", "new", "reason"} <= entry.keys()

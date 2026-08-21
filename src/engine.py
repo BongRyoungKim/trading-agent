@@ -80,6 +80,11 @@ class TradingEngine:
         )
         self._slippage_config = slippage_config if slippage_config is not None else SlippageConfig()
         self._trailing_stop_pct: Decimal | None = None  # set via trailing_stop_pct property
+        # SL/TP risk knobs — overridable via properties (CLI / live_params auto-tuning)
+        self._sl_floor_pct: Decimal = Decimal("3.0")     # max SL distance from entry, %
+        self._sl_ceiling_pct: Decimal = Decimal("1.5")   # min SL distance from entry, %
+        self._atr_multiplier: float = 2.0
+        self._tp_rr_multiplier: Decimal = Decimal("1.5")
         self._start_time: float | None = None
         self._data_validator = OHLCVValidator()
         self._scheduler = BackgroundScheduler(daemon=True)
@@ -160,6 +165,38 @@ class TradingEngine:
     @trailing_stop_pct.setter
     def trailing_stop_pct(self, value: float | Decimal | None) -> None:
         self._trailing_stop_pct = Decimal(str(value)) if value is not None else None
+
+    @property
+    def sl_floor_pct(self) -> Decimal:
+        return self._sl_floor_pct
+
+    @sl_floor_pct.setter
+    def sl_floor_pct(self, value: float | Decimal) -> None:
+        self._sl_floor_pct = Decimal(str(value))
+
+    @property
+    def sl_ceiling_pct(self) -> Decimal:
+        return self._sl_ceiling_pct
+
+    @sl_ceiling_pct.setter
+    def sl_ceiling_pct(self, value: float | Decimal) -> None:
+        self._sl_ceiling_pct = Decimal(str(value))
+
+    @property
+    def atr_multiplier(self) -> float:
+        return self._atr_multiplier
+
+    @atr_multiplier.setter
+    def atr_multiplier(self, value: float) -> None:
+        self._atr_multiplier = float(value)
+
+    @property
+    def tp_rr_multiplier(self) -> Decimal:
+        return self._tp_rr_multiplier
+
+    @tp_rr_multiplier.setter
+    def tp_rr_multiplier(self, value: float | Decimal) -> None:
+        self._tp_rr_multiplier = Decimal(str(value))
 
     @property
     def symbol_blacklist(self) -> frozenset[str]:
@@ -328,6 +365,8 @@ class TradingEngine:
         daily_report_hour: int | None = 0,
         heartbeat_interval: int | None = 3600,
         pin_symbols: bool = True,
+        weekly_report_day: str | None = "mon",
+        weekly_report_hour: int = 9,
     ) -> None:
         """
         Start the scheduler and block until stop() is called or a termination
@@ -342,6 +381,9 @@ class TradingEngine:
                                  None disables heartbeats.
             pin_symbols:         If False, auto-refresh can freely add/remove symbols.
                                  Use with --top-symbols for dynamic universe tracking.
+            weekly_report_day:  APScheduler cron day_of_week for the weekly Telegram
+                                 digest (e.g. "mon"). None disables the weekly report.
+            weekly_report_hour: Hour (0-23) to send the weekly report.
         """
         self._initial_capital = self._portfolio.cash
         self._start_time = time.monotonic()
@@ -421,6 +463,19 @@ class TradingEngine:
             )
             logger.info("Daily report scheduled", hour=daily_report_hour)
 
+        if weekly_report_day and self._telegram.is_enabled:
+            self._scheduler.add_job(
+                self._send_weekly_report,
+                trigger="cron",
+                day_of_week=weekly_report_day,
+                hour=weekly_report_hour,
+                minute=0,
+                id="weekly_report",
+            )
+            logger.info(
+                "Weekly report scheduled", day=weekly_report_day, hour=weekly_report_hour
+            )
+
         if self._market_hours.enabled and self._telegram.is_enabled:
             open_t = self._market_hours.open_time()
             close_t = self._market_hours.close_time()
@@ -444,6 +499,16 @@ class TradingEngine:
                 close=self._market_hours.trading_hours.split("-")[1],
                 days=self._market_hours.trading_days,
             )
+
+        # Auto-tuning restart watch — checked independently of the daily report
+        # cron so a parameter change applied by ScheduledTaskRunner takes effect
+        # within ~1 minute instead of waiting up to 24h for the next daily run.
+        self._scheduler.add_job(
+            self._check_pending_restart,
+            trigger="interval",
+            seconds=60,
+            id="restart_watch",
+        )
 
         if heartbeat_interval is not None and heartbeat_interval > 0:
             self._scheduler.add_job(
@@ -565,29 +630,29 @@ class TradingEngine:
         ticker = self._exchange.get_ticker(symbol)
         price = ticker.last
 
-        # ATR-based SL: 2.0×ATR, clamped to [1.5%, 3.0%] range below entry.
-        # MeanReversionStrategy (15m) fix: BTC 15m ATR is ~0.3-0.5% of price, so
-        # ATR×1.5 gave SL at only ~0.49% — triggered by noise, not real trend reversal.
+        # ATR-based SL, clamped to [sl_ceiling_pct, sl_floor_pct]% below entry.
         # Dual clamp:
-        #   sl_ceiling (min distance 1.5%): prevents noise stops on low-ATR coins like BTC
-        #   sl_floor   (max distance 3.0%): caps max loss per trade (relaxed from 2.5%)
+        #   sl_ceiling_pct (min distance): prevents noise stops on low-ATR coins like BTC
+        #   sl_floor_pct   (max distance): caps max loss per trade
+        # Both knobs and atr_multiplier/tp_rr_multiplier are live-tunable (see
+        # src.config.live_params) — auto-adjusted by ScheduledTaskRunner and
+        # picked up on the next process restart.
         atr_val = signal_.metadata.get("atr") if signal_ and signal_.metadata else None
         stop_loss = self._risk_manager.calculate_stop_loss(
             price, side="buy",
             atr_value=float(atr_val) if atr_val else None,
-            atr_multiplier=2.0,
+            atr_multiplier=self._atr_multiplier,
         )
-        sl_ceiling = price * Decimal("0.985")   # SL no closer than 1.5% (noise guard)
-        sl_floor   = price * Decimal("0.970")   # SL no farther than 3.0% (loss cap)
+        sl_ceiling = price * (Decimal("1") - self._sl_ceiling_pct / Decimal("100"))
+        sl_floor   = price * (Decimal("1") - self._sl_floor_pct / Decimal("100"))
         if stop_loss > sl_ceiling:
             stop_loss = sl_ceiling
         if stop_loss < sl_floor:
             stop_loss = sl_floor
-        # Take profit: 2× SL distance (2:1 RR).
-        # SL range 1.5-2.5% → TP range 3-5%. Achievable for mean reversion bounces.
-        # Trailing stop (--trailing-stop-pct 1.5) locks profits on the bounce.
+        # Take profit: tp_rr_multiplier × SL distance.
+        # Trailing stop locks profits once price moves toward TP.
         sl_distance = price - stop_loss
-        tp_distance = sl_distance * Decimal("2")
+        tp_distance = sl_distance * self._tp_rr_multiplier
         take_profit = price + tp_distance
 
         amount = fixed_fraction(
@@ -1038,6 +1103,52 @@ class TradingEngine:
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to send daily Telegram report", error=str(exc))
+
+    # ── Internal: auto-tuning restart watch ──────────────────────────────────
+
+    def _check_pending_restart(self) -> None:
+        """
+        Scheduled job (frequent, independent of the daily report cron):
+        if ScheduledTaskRunner has flagged a live_params change, notify and
+        stop the engine so the watchdog relaunches (~30s) with the new
+        .strategy_params.json — this is what makes auto-tuning "immediate"
+        rather than waiting for the next daily report window.
+        """
+        try:
+            from src.config import live_params  # noqa: PLC0415
+
+            if live_params.restart_requested():
+                reason = live_params.read_restart_reason() or "파라미터 자동 조정"
+                if self._telegram.is_enabled:
+                    self._telegram.send(
+                        "🔄 <b>파라미터 자동 조정 반영을 위해 재시작합니다</b>\n"
+                        f"{reason}\n워치독이 ~30초 내 새 파라미터로 재기동합니다."
+                    )
+                live_params.clear_restart_request()
+                logger.warning("Restart requested by auto-tuning — stopping engine", reason=reason)
+                self.stop()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to process auto-tuning restart request", error=str(exc))
+
+    # ── Internal: weekly report ───────────────────────────────────────────────
+
+    def _send_weekly_report(self) -> None:
+        """Scheduled job: send Telegram weekly PnL + auto-tuning digest."""
+        try:
+            from src.report.generator import DailyReportGenerator  # noqa: PLC0415
+            journal_path = getattr(self._journal, "_store", None)
+            db_path = (
+                str(getattr(journal_path, "_db_path", "data/journal.db"))
+                if journal_path is not None
+                else "data/journal.db"
+            )
+            gen = DailyReportGenerator(journal_path=db_path)
+            report_path, summary = gen.generate_weekly()
+            logger.info("Weekly Markdown report saved", path=str(report_path))
+            if self._telegram.is_enabled:
+                self._telegram.send(summary)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to send weekly report", error=str(exc))
 
     # ── Internal: strategy resolution ────────────────────────────────────────
 

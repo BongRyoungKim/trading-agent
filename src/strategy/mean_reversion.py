@@ -30,7 +30,7 @@ import pandas as pd
 from src.strategy.base import BaseStrategy
 from src.strategy.models import Signal, SignalAction
 from src.strategy.registry import register
-from src.utils.indicators import atr, ema, rsi as calc_rsi
+from src.utils.indicators import atr, ema, macd as calc_macd, rsi as calc_rsi
 
 
 @register
@@ -138,6 +138,7 @@ class MeanReversionStrategy(BaseStrategy):
         rsi_fast   = calc_rsi(close, self._rsi_fast_period)
         rsi_slow   = calc_rsi(close, self._rsi_slow_period)
         atr_series = atr(high, low, close, self._atr_period)
+        macd_df    = calc_macd(close)
         vol_avg    = volume.rolling(self._vol_lookback).mean()
 
         rsi_f_now  = float(rsi_fast.iloc[-1])
@@ -147,6 +148,18 @@ class MeanReversionStrategy(BaseStrategy):
         vol_avg_now= float(vol_avg.iloc[-1])
         price_now  = float(close.iloc[-1])
         open_now   = float(open_.iloc[-1])
+
+        hist_raw      = float(macd_df["histogram"].iloc[-1])
+        hist_prev_raw = float(macd_df["histogram"].iloc[-2])
+        macd_hist      = None if (hist_raw != hist_raw) else round(hist_raw, 4)        # NaN guard
+        macd_hist_prev = None if (hist_prev_raw != hist_prev_raw) else round(hist_prev_raw, 4)
+
+        # Block entry when selling pressure is accelerating (histogram falling)
+        macd_momentum_ok = (
+            macd_hist is None
+            or macd_hist_prev is None
+            or macd_hist >= macd_hist_prev
+        )
 
         vol_ratio  = vol_now / vol_avg_now if vol_avg_now > 0 else 0.0
         is_bullish_candle = bool(close.iloc[-1] > open_.iloc[-1])
@@ -161,17 +174,26 @@ class MeanReversionStrategy(BaseStrategy):
         # ── 메타데이터 ─────────────────────────────────────────────────────────
         meta = {
             "price":     price_now,
+            "rsi":       round(rsi_s_now, 1),   # 대시보드 공통 필드 (RSI14)
             "rsi_fast":  round(rsi_f_now, 1),
             "rsi_slow":  round(rsi_s_now, 1),
+            "macd_hist": macd_hist,              # 대시보드 공통 필드
+            "vol_krw":   round(vol_now * price_now, 0),  # 대시보드 공통 필드
             "atr":       round(atr_now, 4),
             "vol_ratio": round(vol_ratio, 2),
             "sma200":    round(sma_now, 2) if sma_now else None,
             "cond": {
-                "rsi_fast_oversold":  bool(rsi_f_now < self._rsi_oversold_fast),
-                "rsi_slow_oversold":  bool(rsi_s_now < self._rsi_oversold_slow),
-                "vol_ok":             bool(vol_ratio >= self._vol_mult),
-                "bullish_candle":     is_bullish_candle,
-                "sma_ok":             sma_ok,
+                # 대시보드 공통 키 — 템플릿이 기대하는 필드명으로 매핑
+                "above_ema":        is_bullish_candle,                              # E: 양봉(반등 시작)
+                "macd_just_pos":    bool(macd_hist is not None and macd_hist > 0),  # M: MACD 양수 구간
+                "macd_rising":      macd_momentum_ok,                               # MACD 모멘텀 개선
+                "rsi_ok":           bool(rsi_s_now < self._rsi_oversold_slow),      # R: RSI14 과매도
+                "vol_ok":           bool(vol_ratio >= self._vol_mult),              # V: 거래량 급증
+                "adx_ok":           sma_ok,                                         # A: SMA 필터 통과
+                "ema_proximity_ok": bool(rsi_f_now < self._rsi_oversold_fast),      # P: RSI5 과매도
+                "death_cross":      bool(rsi_s_now >= self._rsi_exit),              # D: RSI14 회복(청산)
+                "macd_turned_neg":  bool(rsi_f_now >= self._rsi_exit_fast),         # M↓: RSI5 과매수
+                "overbought":       bool(rsi_s_now >= self._rsi_exit or rsi_f_now >= self._rsi_exit_fast),
             },
         }
 
@@ -206,6 +228,7 @@ class MeanReversionStrategy(BaseStrategy):
             and is_bullish_candle
             and sma_ok
             and time_ok
+            and macd_momentum_ok
         )
         if buy_condition:
             # 과매도 깊이 기반 강도 계산 (더 낮을수록 강한 신호)
@@ -238,6 +261,8 @@ class MeanReversionStrategy(BaseStrategy):
             missing.append(f"SMA200이탈(가격={price_now:.0f},SMA={sma_now:.0f})")
         if not time_ok:
             missing.append(f"시간대차단({current_hour_utc}UTC)")
+        if not macd_momentum_ok:
+            missing.append(f"MACD역전({macd_hist_prev:.4f}→{macd_hist:.4f})")
 
         return Signal(
             symbol=self._symbol,

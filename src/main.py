@@ -184,6 +184,48 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="SYMBOL",
         help="Symbols to never trade (blacklist). e.g. --exclude-symbols DOGE/KRW ELSA/KRW",
     )
+    p.add_argument(
+        "--sl-floor-pct",
+        type=float,
+        default=3.0,
+        dest="sl_floor_pct",
+        help="Max stop-loss distance from entry, in percent (default: 3.0).",
+    )
+    p.add_argument(
+        "--sl-ceiling-pct",
+        type=float,
+        default=1.5,
+        dest="sl_ceiling_pct",
+        help="Min stop-loss distance from entry, in percent (default: 1.5).",
+    )
+    p.add_argument(
+        "--atr-multiplier",
+        type=float,
+        default=2.0,
+        dest="atr_multiplier",
+        help="ATR multiplier used to size the stop-loss distance (default: 2.0).",
+    )
+    p.add_argument(
+        "--tp-rr-multiplier",
+        type=float,
+        default=1.5,
+        dest="tp_rr_multiplier",
+        help="Take-profit distance as a multiple of the SL distance (default: 1.5).",
+    )
+    p.add_argument(
+        "--weekly-report-day",
+        default="mon",
+        dest="weekly_report_day",
+        help="Day of week for the weekly Telegram report, e.g. 'mon' (default: mon). "
+             "Set to '' to disable.",
+    )
+    p.add_argument(
+        "--weekly-report-hour",
+        type=int,
+        default=9,
+        dest="weekly_report_hour",
+        help="Hour (0-23) to send the weekly Telegram report (default: 9).",
+    )
     return p
 
 
@@ -382,6 +424,10 @@ def main() -> None:
     )
     if args.trailing_stop_pct is not None:
         engine.trailing_stop_pct = args.trailing_stop_pct
+    engine.sl_floor_pct = args.sl_floor_pct
+    engine.sl_ceiling_pct = args.sl_ceiling_pct
+    engine.atr_multiplier = args.atr_multiplier
+    engine.tp_rr_multiplier = args.tp_rr_multiplier
     if args.exclude_symbols:
         engine.symbol_blacklist = args.exclude_symbols
         logger.info("Symbol blacklist applied", excluded=args.exclude_symbols)
@@ -432,6 +478,8 @@ def main() -> None:
             interval_seconds=args.interval,
             heartbeat_interval=args.heartbeat_interval or None,
             pin_symbols=(args.top_symbols == 0),
+            weekly_report_day=(args.weekly_report_day or None),
+            weekly_report_hour=args.weekly_report_hour,
         )
     finally:
         prevent_sleep.disable()

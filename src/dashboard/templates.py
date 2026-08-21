@@ -528,9 +528,14 @@ function renderTicks(items, flashSymbol, prevTick) {{
   const buyPill  = (lbl, ok, title) => `<span class="cp ${{ok?'cp-buy':'cp-dim'}}" title="${{title}}">${{lbl}}</span>`;
   const sellPill = (lbl, on_, title) => `<span class="cp ${{on_?'cp-sell':'cp-dim'}}" title="${{title}}">${{lbl}}</span>`;
 
+  const regimeBadge = r => {{
+    const map = {{uptrend:['#10b981','상승'], downtrend:['#ef4444','하락'], ranging:['#f59e0b','횡보']}};
+    const [rc, rl] = map[r] || ['#64748b', r||'-'];
+    return `<span class="badge" style="background:${{rc}}22;color:${{rc}};font-size:.7rem">${{rl}}</span>`;
+  }};
   const thead = `<table class="ticks-table"><thead><tr>
     <th style="width:2rem;text-align:center">#</th>
-    <th>종목</th><th>신호</th><th>현재가</th>
+    <th>종목</th><th>국면</th><th>신호</th><th>현재가</th>
     <th title="거래대금 (KRW)">거래대금</th>
     <th title="RSI">RSI</th>
     <th title="MACD histogram">MACD</th>
@@ -562,6 +567,7 @@ function renderTicks(items, flashSymbol, prevTick) {{
     return `<tr class="${{flash}}" id="tick-row-${{t.symbol.replace('/','_')}}">
       <td style="text-align:center;color:#475569;font-size:.72rem;font-weight:600">${{rank}}</td>
       <td><code>${{t.symbol}}</code></td>
+      <td>${{regimeBadge(m.regime)}}</td>
       <td><span class="badge" style="background:${{ac}}22;color:${{ac}}">${{t.action}}</span>${{actionDot}}</td>
       <td style="font-weight:600">${{price}}</td>
       <td style="color:#94a3b8;font-size:.78rem">${{volKrw}}</td>
@@ -872,6 +878,8 @@ setInterval(refreshPositionsTrades, 5000);
   _initTickStream();
   // Load strategy info immediately
   fetch('/api/strategy').then(r=>r.json()).then(renderStrategy).catch(()=>{{}});
+  // Populate positions/trades immediately (don't wait for 5s interval)
+  refreshPositionsTrades();
 }})();
 </script>
 </body>
@@ -1119,7 +1127,7 @@ def _render_ticks(ticks: list[dict]) -> str:
     thead = (
         '<table class="ticks-table"><thead><tr>'
         "<th style='width:2rem;text-align:center'>#</th>"
-        "<th>종목</th><th>신호</th><th>현재가</th><th>거래대금</th><th>RSI</th><th>MACD</th>"
+        "<th>종목</th><th>국면</th><th>신호</th><th>현재가</th><th>거래대금</th><th>RSI</th><th>MACD</th>"
         "<th title='매수: E M R V A P │ 매도: D M'>조건</th><th>시각</th>"
         "</tr></thead><tbody>"
     )
@@ -1145,6 +1153,14 @@ def _render_ticks(ticks: list[dict]) -> str:
         macd_str = f"{macd_h:+.4f}" if macd_h is not None else "-"
         vol_krw = meta.get("vol_krw")
         vol_str = f"₩{vol_krw:,.0f}" if vol_krw else "-"
+        regime = meta.get("regime", "")
+        regime_map = {
+            "uptrend":   ("#10b981", "상승"),
+            "downtrend": ("#ef4444", "하락"),
+            "ranging":   ("#f59e0b", "횡보"),
+        }
+        rc, rl = regime_map.get(regime, ("#64748b", regime or "-"))
+        regime_html = f"<span class='badge' style='background:{rc}22;color:{rc};font-size:.7rem'>{rl}</span>"
         ts = (t.get("timestamp") or "")[-8:-3]
         if cond:
             cond_html = (
@@ -1164,6 +1180,7 @@ def _render_ticks(ticks: list[dict]) -> str:
             f"<tr>"
             f"<td style='text-align:center;color:#475569;font-size:.72rem;font-weight:600'>{rank}</td>"
             f"<td><code>{sym}</code></td>"
+            f"<td>{regime_html}</td>"
             f"<td><span class='badge' style='background:{color}22;color:{color}'>{action}</span></td>"
             f"<td style='font-weight:600'>{price_str}</td>"
             f"<td style='color:#94a3b8;font-size:.78rem'>{vol_str}</td>"

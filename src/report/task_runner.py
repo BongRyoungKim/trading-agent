@@ -5,11 +5,16 @@ DailyReportGenerator가 매일 스케줄 실행 시 호출한다.
 _pending_tasks()에 나열된 조건을 실제로 평가하고, 조건 충족 시 작업을 수행한다.
 
 작업 목록:
-  - param_review_20  : 20건 달성 → 심볼별 성과 분석 + 파라미터 권장 JSON 저장
-  - wr_alert         : WR < 40% (10건+) → 진입 조건 강화 권장 JSON 저장
-  - pnl_alert        : 누적 PnL < 0 (10건+) → SL/TP 조정 권장 JSON 저장
-  - sl_review        : SL 청산 비율 과다 (5건+) → SL 범위 완화 권장 JSON 저장
+  - param_review_20  : 20건 달성 → 심볼별 성과 분석 + 파라미터 권장 JSON 저장 (정보성, 자동적용 없음)
+  - wr_alert         : WR < 40% (10건+) → mr_rsi_oversold_fast/slow↓, mr_vol_mult↑ 자동 적용
+  - pnl_alert        : 누적 PnL < 0 (10건+) → tp_rr_multiplier↑ 자동 적용
+  - sl_review        : SL 청산 비율 과다 (5건+) → sl_floor_pct↑ 자동 적용
   - walk_forward_50  : 50건 달성 → Walk-Forward 실행 트리거 파일 생성
+
+자동 적용은 src.config.live_params 를 통해 이루어지며, 각 파라미터는
+PARAM_BOUNDS 클램프와 ±20% 1회 변동폭 제한을 거친 뒤 .strategy_params.json
+에 반영되고 .restart_requested 플래그가 세워진다. 실제 반영은 워치독이
+프로세스를 재기동할 때 발생한다 (DailyReportGenerator 호출부에서 처리).
 
 상태 파일 reports/.task_state.json 으로 중복 실행 방지.
 5건 단위로 wr_alert / pnl_alert / sl_review 는 재평가한다.
@@ -23,6 +28,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from loguru import logger
+
+from src.config import live_params as lp
 
 KST = timezone(timedelta(hours=9))
 REPORTS_DIR = Path(__file__).parent.parent.parent / "reports"
@@ -169,64 +176,103 @@ class ScheduledTaskRunner:
             return ActionResult("param_review_20", "20건 파라미터 검토", "error", str(exc))
 
     def _run_wr_alert(self, wr: float, stats: dict) -> ActionResult:
-        """WR < 40% — 진입 조건 강화 권장 저장."""
+        """WR < 40% — 진입 조건 강화 자동 적용 (RSI 과매도 기준↓, 거래량 기준↑)."""
+        trigger = f"WR {wr:.1f}% < 40% (거래 {stats['total']}건)"
+        applied = [
+            lp.propose_and_apply(
+                "mr_rsi_oversold_fast",
+                lp.get_current("mr_rsi_oversold_fast") * 0.8,
+                trigger="wr_alert", reason=trigger,
+            ),
+            lp.propose_and_apply(
+                "mr_rsi_oversold_slow",
+                lp.get_current("mr_rsi_oversold_slow") * 0.8,
+                trigger="wr_alert", reason=trigger,
+            ),
+            lp.propose_and_apply(
+                "mr_vol_mult",
+                lp.get_current("mr_vol_mult") * 1.2,
+                trigger="wr_alert", reason=trigger,
+            ),
+        ]
+        gap_fix = lp.enforce_rsi_gap()
+        if gap_fix:
+            applied = [a for a in applied if a["param"] != gap_fix["param"]] + [
+                {**gap_fix, "changed": True}
+            ]
+
         rec = {
-            "date":          str(date.today()),
-            "trigger":       f"WR {wr:.1f}% < 40% (거래 {stats['total']}건)",
-            "current_stats": stats,
-            "recommended_changes": [
-                "rsi_oversold_fast: 25 → 20  (더 극단적 과매도만 진입)",
-                "rsi_oversold_slow: 35 → 30  (중기 RSI 기준 강화)",
-                "vol_mult: 1.5 → 2.0         (거래량 기준 강화)",
-            ],
-            "note": "start_agent.bat --rsi_oversold_fast 등 파라미터 수동 적용 필요. 10건 더 축적 후 재평가.",
+            "date":            str(date.today()),
+            "trigger":         trigger,
+            "current_stats":   stats,
+            "applied_changes": applied,
         }
         out = REC_DIR / f"{date.today()}-wr-alert.json"
         out.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
-        detail = f"WR {wr:.1f}% < 40% — 진입 조건 강화 권장 (rsi_oversold_fast↓, vol_mult↑)"
-        logger.warning("Low WR alert triggered", wr=wr, path=str(out))
-        return ActionResult("wr_alert", "승률 경보 — 파라미터 조정 권장", "executed", detail, str(out))
+
+        changed = [a for a in applied if a["changed"]]
+        if changed:
+            summary = ", ".join(f"{a['param']} {a['old']}→{a['new']}" for a in changed)
+            detail = f"{trigger} — 진입 조건 자동 강화: {summary}"
+            lp.request_restart(f"wr_alert: {summary}")
+        else:
+            detail = f"{trigger} — 파라미터가 이미 안전범위 경계라 추가 조정 없음"
+        logger.warning("Low WR alert triggered", wr=wr, applied=applied, path=str(out))
+        return ActionResult("wr_alert", "승률 경보 — 진입 조건 자동 강화", "executed", detail, str(out))
 
     def _run_pnl_alert(self, pnl: float, stats: dict) -> ActionResult:
-        """누적 PnL 음수 — SL/TP 조정 권장 저장."""
+        """누적 PnL 음수 — TP 목표 상향 자동 적용 (더 큰 수익으로 손실 상쇄)."""
+        trigger = f"누적 PnL {pnl:+,.0f}원 < 0 (거래 {stats['total']}건)"
+        result = lp.propose_and_apply(
+            "tp_rr_multiplier",
+            lp.get_current("tp_rr_multiplier") * 1.2,
+            trigger="pnl_alert", reason=trigger,
+        )
         rec = {
-            "date":          str(date.today()),
-            "trigger":       f"누적 PnL {pnl:+,.0f}원 < 0 (거래 {stats['total']}건)",
-            "current_stats": stats,
-            "recommended_changes": [
-                "SL 클램프 하한 완화: sl_floor 2.5%→3.0% (손절 공간 확보)",
-                "또는 TP 목표 상향: RR 2:1 → 3:1",
-                "또는 rsi_exit 하향: 60 → 55 (더 빠른 수익 실현)",
-            ],
-            "note": "SL 클램프는 engine.py _handle_buy_signal() 직접 수정. 10건 후 재평가.",
+            "date":            str(date.today()),
+            "trigger":         trigger,
+            "current_stats":   stats,
+            "applied_changes": [result],
         }
         out = REC_DIR / f"{date.today()}-pnl-alert.json"
         out.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
-        detail = f"누적 PnL {pnl:+,.0f}원 음수 — SL/TP 구조 재검토 권장"
-        logger.warning("Negative PnL alert triggered", pnl=pnl, path=str(out))
-        return ActionResult("pnl_alert", "PnL 경보 — SL/TP 조정 권장", "executed", detail, str(out))
+
+        if result["changed"]:
+            detail = f"{trigger} — TP RR 자동 상향: {result['old']}→{result['new']}"
+            lp.request_restart(f"pnl_alert: tp_rr_multiplier {result['old']}→{result['new']}")
+        else:
+            detail = f"{trigger} — tp_rr_multiplier가 이미 안전범위 경계라 조정 없음"
+        logger.warning("Negative PnL alert triggered", pnl=pnl, applied=result, path=str(out))
+        return ActionResult("pnl_alert", "PnL 경보 — TP 목표 자동 상향", "executed", detail, str(out))
 
     def _run_sl_review(self, sl_count: int, sig_count: int, tp_count: int) -> ActionResult:
-        """SL 청산 비율 과다 — SL 범위 완화 권장 저장."""
+        """SL 청산 비율 과다 — SL 허용폭 자동 완화."""
         exit_total = sl_count + sig_count + tp_count
         sl_ratio   = sl_count / exit_total * 100 if exit_total else 0
+        trigger = f"SL청산 {sl_count}건 / 전체 {exit_total}건 ({sl_ratio:.1f}%)"
+        result = lp.propose_and_apply(
+            "sl_floor_pct",
+            lp.get_current("sl_floor_pct") * 1.2,
+            trigger="sl_review", reason=trigger,
+        )
         rec = {
-            "date":          str(date.today()),
-            "trigger":       f"SL청산 {sl_count}건 / 전체 {exit_total}건 ({sl_ratio:.1f}%)",
-            "sl_count":      sl_count,
-            "signal_count":  sig_count,
-            "tp_count":      tp_count,
-            "recommended_changes": [
-                "SL 클램프 하한 완화: sl_floor 2.5%→3.0% (손절 공간 확보)",
-                "또는 ATR multiplier 상향: 2.0→2.5 (변동성 대비 여유)",
-                "또는 진입 기준 강화로 SL에 걸리는 진입 자체를 줄임",
-            ],
+            "date":            str(date.today()),
+            "trigger":         trigger,
+            "sl_count":        sl_count,
+            "signal_count":    sig_count,
+            "tp_count":        tp_count,
+            "applied_changes": [result],
         }
         out = REC_DIR / f"{date.today()}-sl-review.json"
         out.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
-        detail = f"SL 청산 {sl_ratio:.1f}% 과다 ({sl_count}/{exit_total}건) — SL 범위 완화 권장"
-        logger.warning("High SL ratio alert", sl_ratio=sl_ratio, path=str(out))
-        return ActionResult("sl_review", "SL 비율 검토 — 범위 완화 권장", "executed", detail, str(out))
+
+        if result["changed"]:
+            detail = f"SL 청산 {sl_ratio:.1f}% 과다 — SL 허용폭 자동 완화: {result['old']}%→{result['new']}%"
+            lp.request_restart(f"sl_review: sl_floor_pct {result['old']}→{result['new']}")
+        else:
+            detail = f"SL 청산 {sl_ratio:.1f}% 과다 — sl_floor_pct가 이미 안전범위 경계라 조정 없음"
+        logger.warning("High SL ratio alert", sl_ratio=sl_ratio, applied=result, path=str(out))
+        return ActionResult("sl_review", "SL 비율 경보 — SL 허용폭 자동 완화", "executed", detail, str(out))
 
     def _trigger_walk_forward(self) -> ActionResult:
         """50건 달성 — Walk-Forward 실행 트리거 파일 생성."""

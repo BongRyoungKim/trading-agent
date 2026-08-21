@@ -12,6 +12,7 @@ reports/YYYY-MM-DD.md 로 저장한다.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
@@ -21,11 +22,13 @@ from loguru import logger
 
 from src.report.task_runner import ActionResult, ScheduledTaskRunner
 
+PARAM_CHANGE_LOG = Path(__file__).parent.parent.parent / "reports" / "param_change_log.jsonl"
+
 KST = timezone(timedelta(hours=9))
 REPORTS_DIR = Path(__file__).parent.parent.parent / "reports"
 
-# MeanReversionStrategy 배포 시점 (KST Unix ts)
-STRATEGY_DEPLOY_TS = 1775556000   # 2026-04-07 19:00 KST
+# RegimeAdaptiveStrategy 배포 시점 (KST Unix ts)
+STRATEGY_DEPLOY_TS = 1780585200   # 2026-06-05 00:00 KST
 
 
 class DailyReportGenerator:
@@ -98,6 +101,83 @@ class DailyReportGenerator:
         out_path.write_text(md, encoding="utf-8")
         logger.info("Daily report saved", path=str(out_path))
         return out_path
+
+    def generate_weekly(self) -> tuple[Path, str]:
+        """
+        최근 7일 실적 + 자동 파라미터 조정 내역을 담은 주간 보고서 생성.
+
+        Returns:
+            (저장된 Markdown 경로, Telegram 발송용 요약 텍스트)
+        """
+        week_end = datetime.now(KST).date()
+        week_start = week_end - timedelta(days=7)
+        week_start_ts = datetime(
+            week_start.year, week_start.month, week_start.day, 0, 0, 0, tzinfo=KST
+        ).timestamp()
+        week_end_ts = datetime(
+            week_end.year, week_end.month, week_end.day, 0, 0, 0, tzinfo=KST
+        ).timestamp() + 86400
+
+        conn = sqlite3.connect(self._journal_path)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*),
+                   SUM(CASE WHEN CAST(pnl AS REAL)>0 THEN 1 ELSE 0 END),
+                   SUM(CAST(pnl AS REAL)),
+                   COUNT(CASE WHEN reason='stop_loss' THEN 1 END),
+                   COUNT(CASE WHEN reason='take_profit' THEN 1 END),
+                   COUNT(CASE WHEN reason='signal' THEN 1 END)
+            FROM trades WHERE exit_time >= ? AND exit_time < ?
+            """,
+            (week_start_ts, week_end_ts),
+        )
+        total, wins, week_pnl, sl_cnt, tp_cnt, sig_cnt = cur.fetchone()
+        conn.close()
+        total = total or 0
+        wins = wins or 0
+        week_pnl = week_pnl or 0.0
+
+        mr_stats = self._query_strategy_stats(STRATEGY_DEPLOY_TS)
+        all_stats = self._query_all_stats()
+        param_changes = self._recent_param_changes(since_ts=week_start_ts)
+
+        md = self._render_weekly(
+            week_start=week_start, week_end=week_end,
+            total=total, wins=wins, week_pnl=week_pnl,
+            sl_cnt=sl_cnt or 0, tp_cnt=tp_cnt or 0, sig_cnt=sig_cnt or 0,
+            mr_stats=mr_stats, all_stats=all_stats, param_changes=param_changes,
+        )
+
+        out_dir = REPORTS_DIR / "weekly"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{week_end}-weekly.md"
+        out_path.write_text(md, encoding="utf-8")
+        logger.info("Weekly report saved", path=str(out_path))
+
+        summary = self._render_weekly_telegram(
+            week_start, week_end, total, wins, week_pnl, mr_stats, param_changes
+        )
+        return out_path, summary
+
+    def _recent_param_changes(self, since_ts: float) -> list[dict]:
+        """reports/param_change_log.jsonl 에서 since_ts 이후 항목만 필터링."""
+        if not PARAM_CHANGE_LOG.exists():
+            return []
+        since_dt = datetime.fromtimestamp(since_ts, tz=KST)
+        changes: list[dict] = []
+        for line in PARAM_CHANGE_LOG.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                entry_dt = datetime.fromisoformat(entry["date"])
+                if entry_dt >= since_dt:
+                    changes.append(entry)
+            except Exception:
+                continue
+        return changes
 
     # ── Data queries ──────────────────────────────────────────────────────────
 
@@ -172,7 +252,7 @@ class DailyReportGenerator:
         return rows
 
     def _query_strategy_stats(self, since_ts: float) -> dict:
-        """MeanReversionStrategy 이후 통계."""
+        """현재 전략(RegimeAdaptiveStrategy) 배포 이후 통계."""
         conn = sqlite3.connect(self._journal_path)
         cur  = conn.cursor()
         cur.execute(
@@ -249,7 +329,7 @@ class DailyReportGenerator:
             tasks.append(f"실거래 {total}건 — 50건 달성 후 Walk-Forward 최적화 실행")
 
         if total >= 10 and wr < 40:
-            tasks.append(f"승률 {wr:.1f}% < 40% — MeanReversionStrategy 파라미터 재검토 필요")
+            tasks.append(f"승률 {wr:.1f}% < 40% — 전략 파라미터 재검토 또는 국면 감지 임계값 조정 필요")
 
         if total >= 10 and pnl < 0:
             tasks.append("누적 PnL 음수 — 손절 기준(SL %) 재조정 또는 진입 조건 강화 검토")
@@ -278,7 +358,7 @@ class DailyReportGenerator:
 
         lines: list[str] = [
             f"# 트레이딩 일일 보고서 — {report_date}",
-            f"\n> 생성: {now_kst}  |  전략: MeanReversionStrategy  |  모드: Paper",
+            f"\n> 생성: {now_kst}  |  전략: RegimeAdaptiveStrategy  |  모드: Live",
             "",
             "---",
             "",
@@ -356,11 +436,11 @@ class DailyReportGenerator:
                 lines.append(f"| {t['symbol']} | {ep} | {xp} | {t['pnl']:+,.0f} | {t['reason']} |")
             lines += ["", f"**당일 PnL**: {today_pnl:+,.0f}원", ""]
 
-        # 3. 누적 성과 (MeanReversionStrategy)
+        # 3. 누적 성과 (RegimeAdaptiveStrategy)
         s = mr_stats
         pf_str = f"{s['profit_factor']:.2f}" if s["profit_factor"] is not None else "∞"
         lines += [
-            "## 3. 누적 성과 (MeanReversionStrategy 이후)",
+            "## 3. 누적 성과 (RegimeAdaptiveStrategy 이후)",
             "",
             f"| 항목 | 값 |",
             f"|------|----|",
@@ -399,12 +479,13 @@ class DailyReportGenerator:
             "",
             "| 항목 | 내용 |",
             "|------|------|",
-            "| 심볼 | LINK/KRW, BTC/KRW, XRP/KRW |",
-            "| 전략 배포 | 2026-04-07 19:00 KST |",
+            "| 전략 | RegimeAdaptiveStrategy (ADX+EMA 국면 자동 전환) |",
+            "| 전략 배포 | 2026-06-05 KST |",
+            "| 국면 전환 기준 | ADX≥25 + EMA20>EMA50 → SwingMomentum / 나머지 → MeanReversion |",
             "| SL 설정 | ATR×2.0, [1.5%~2.5%] 클램프 |",
-            "| TP 설정 | SL × 2 (2:1 RR) |",
+            "| TP 설정 | SL × 1.5 (1.5:1 RR) |",
             "| Trailing Stop | 1.5% |",
-            "| 전략 전환 조건 | 실거래 50건 이상 & WR 45%+ 달성 시 live 모드 검토 |",
+            "| 모드 | Live (Upbit 실거래) |",
             "",
         ]
 
@@ -443,4 +524,104 @@ class DailyReportGenerator:
             f"*자동 생성: {now_kst}*",
         ]
 
+        return "\n".join(lines)
+
+    # ── Weekly renderer ───────────────────────────────────────────────────────
+
+    def _render_weekly(
+        self,
+        week_start: date,
+        week_end: date,
+        total: int,
+        wins: int,
+        week_pnl: float,
+        sl_cnt: int,
+        tp_cnt: int,
+        sig_cnt: int,
+        mr_stats: dict,
+        all_stats: dict,
+        param_changes: list[dict],
+    ) -> str:
+        now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
+        wr = wins / total * 100 if total else 0
+        s = mr_stats
+        pf_str = f"{s['profit_factor']:.2f}" if s["profit_factor"] is not None else "∞"
+
+        lines: list[str] = [
+            f"# 트레이딩 주간 보고서 — {week_start} ~ {week_end}",
+            f"\n> 생성: {now_kst}  |  전략: RegimeAdaptiveStrategy  |  모드: Live",
+            "",
+            "---",
+            "",
+            "## 1. 이번 주 실적",
+            "",
+            "| 항목 | 값 |",
+            "|------|----|",
+            f"| 거래 | {total}건 |",
+            f"| 승 / 패 | {wins} / {total - wins} |",
+            f"| 승률 | {wr:.1f}% |",
+            f"| 주간 PnL | {week_pnl:+,.0f}원 |",
+            f"| SL / TP / Signal 청산 | {sl_cnt} / {tp_cnt} / {sig_cnt} |",
+            "",
+            "## 2. 누적 성과 (RegimeAdaptiveStrategy 이후)",
+            "",
+            "| 항목 | 값 |",
+            "|------|----|",
+            f"| 총 거래 | {s['total']}건 |",
+            f"| 승률 | {s['wr_pct']:.1f}% |",
+            f"| 누적 PnL | {s['total_pnl']:+,.0f}원 |",
+            f"| Profit Factor | {pf_str} |",
+            "",
+            "### 전체 저널 누적 (모든 전략 포함, 참고용)",
+            "",
+            f"총 {all_stats['total']}건 | WR {all_stats['wr_pct']:.1f}% "
+            f"| 총 PnL {all_stats['total_pnl']:+,.0f}원",
+            "",
+            "## 3. 이번 주 자동 파라미터 조정 내역",
+            "",
+        ]
+
+        if param_changes:
+            lines += [
+                "| 일시 | 트리거 | 파라미터 | 이전 | 이후 | 사유 |",
+                "|------|--------|----------|-----:|-----:|------|",
+            ]
+            for c in param_changes:
+                lines.append(
+                    f"| {c['date'][:16]} | {c['trigger']} | {c['param']} "
+                    f"| {c['old']} | {c['new']} | {c['reason']} |"
+                )
+        else:
+            lines.append("이번 주 자동 조정 없음.")
+        lines.append("")
+
+        lines += [
+            "---",
+            f"*자동 생성: {now_kst}*",
+        ]
+        return "\n".join(lines)
+
+    def _render_weekly_telegram(
+        self,
+        week_start: date,
+        week_end: date,
+        total: int,
+        wins: int,
+        week_pnl: float,
+        mr_stats: dict,
+        param_changes: list[dict],
+    ) -> str:
+        wr = wins / total * 100 if total else 0
+        lines = [
+            f"📊 <b>주간 리포트 ({week_start} ~ {week_end})</b>",
+            f"이번 주: {total}건 | WR {wr:.1f}% | PnL {week_pnl:+,.0f}원",
+            f"누적(현 전략): {mr_stats['total']}건 | WR {mr_stats['wr_pct']:.1f}% "
+            f"| PnL {mr_stats['total_pnl']:+,.0f}원",
+        ]
+        if param_changes:
+            lines.append(f"\n⚙️ 이번 주 자동 조정 {len(param_changes)}건:")
+            for c in param_changes[-5:]:
+                lines.append(f"  • {c['param']}: {c['old']}→{c['new']} ({c['trigger']})")
+        else:
+            lines.append("\n이번 주 자동 파라미터 조정 없음.")
         return "\n".join(lines)

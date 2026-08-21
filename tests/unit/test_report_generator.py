@@ -109,7 +109,7 @@ class TestDailyReportGeneratorGenerate:
         with patch.object(gen, '_fetch_market_status', return_value=[]):
             path = gen.generate("2026-04-28")
         content = path.read_text(encoding="utf-8")
-        assert "MeanReversionStrategy" in content
+        assert "RegimeAdaptiveStrategy" in content
 
     def test_generate_runs_tasks_when_enabled(self, gen_env, monkeypatch):
         import src.report.task_runner as tr
@@ -281,7 +281,7 @@ class TestRender:
             all_stats=self._all_stats(),
             tasks=[],
         )
-        assert "MeanReversionStrategy" in md
+        assert "RegimeAdaptiveStrategy" in md
 
     def test_render_with_prev_trades(self, tmp_path):
         gen = DailyReportGenerator(journal_path=str(tmp_path / "j.db"))

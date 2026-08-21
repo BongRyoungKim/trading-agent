@@ -1,0 +1,23 @@
+{
+  "strategy_params": {
+    "adx_trend_threshold": 25.0,
+    "mr_vol_mult": 2.4,
+    "mr_rsi_oversold_fast": 16.0,
+    "mr_rsi_oversold_slow": 24.0,
+    "mr_rsi_exit": 55.0,
+    "mr_no_entry_hours_utc": [
+      17,
+      18,
+      19,
+      20
+    ],
+    "sm_vol_mult": 1.5,
+    "sm_adx_threshold": 28.0
+  },
+  "risk": {
+    "sl_floor_pct": 3.6,
+    "sl_ceiling_pct": 1.5,
+    "atr_multiplier": 2.0,
+    "tp_rr_multiplier": 1.8
+  }
+}

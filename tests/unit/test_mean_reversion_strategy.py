@@ -162,13 +162,53 @@ class TestMeanReversionSignals:
         df = _make_df(_flat(100))
         sig = s.generate_signal(df)
         assert "cond" in sig.metadata
-        assert "vol_ok" in sig.metadata["cond"]
+        expected_keys = {
+            "above_ema", "macd_just_pos", "rsi_ok", "vol_ok",
+            "adx_ok", "ema_proximity_ok", "death_cross", "macd_turned_neg", "overbought",
+        }
+        assert expected_keys <= set(sig.metadata["cond"].keys())
+
+    def test_cond_overbought_on_rising_prices(self):
+        s = MeanReversionStrategy("BTC/KRW")
+        df = _make_df(_rising(100, pct=0.8))
+        sig = s.generate_signal(df)
+        assert sig.metadata["cond"]["overbought"] is True
+        assert sig.metadata["cond"]["death_cross"] is True
+
+    def test_cond_rsi_ok_on_oversold(self):
+        # flat prices → RSI≈50; oversold_slow=60 > 50, exit=80 — validation passes
+        s = MeanReversionStrategy("BTC/KRW", rsi_oversold_slow=60.0, rsi_exit=80.0)
+        df = _make_df(_flat(100))
+        sig = s.generate_signal(df)
+        assert sig.metadata["cond"]["rsi_ok"] is True
 
     def test_metadata_has_price(self):
         s = MeanReversionStrategy("BTC/KRW")
         df = _make_df(_flat(100))
         sig = s.generate_signal(df)
         assert sig.metadata["price"] == pytest.approx(50000.0)
+
+    def test_metadata_has_rsi(self):
+        s = MeanReversionStrategy("BTC/KRW")
+        df = _make_df(_flat(100))
+        sig = s.generate_signal(df)
+        assert "rsi" in sig.metadata
+        assert 0.0 <= sig.metadata["rsi"] <= 100.0
+
+    def test_metadata_has_vol_krw(self):
+        s = MeanReversionStrategy("BTC/KRW")
+        df = _make_df(_flat(100), volumes=[200.0] * 100)
+        sig = s.generate_signal(df)
+        assert "vol_krw" in sig.metadata
+        assert sig.metadata["vol_krw"] == pytest.approx(200.0 * 50000.0, rel=1e-3)
+
+    def test_metadata_has_macd_hist(self):
+        s = MeanReversionStrategy("BTC/KRW")
+        df = _make_df(_flat(100))
+        sig = s.generate_signal(df)
+        assert "macd_hist" in sig.metadata
+        # flat price → MACD hist ≈ 0 (may be None if NaN, but flat gives real value)
+        assert sig.metadata["macd_hist"] is None or isinstance(sig.metadata["macd_hist"], float)
 
     def test_signal_strength_in_range(self):
         s = MeanReversionStrategy("BTC/KRW")
@@ -216,6 +256,34 @@ class TestMeanReversionSignals:
         df = _make_df(_flat(100), with_timestamp=False)
         sig = s.generate_signal(df)
         assert sig is not None
+
+    def test_cond_has_macd_rising_key(self):
+        s = MeanReversionStrategy("BTC/KRW")
+        df = _make_df(_flat(100))
+        sig = s.generate_signal(df)
+        assert "macd_rising" in sig.metadata["cond"]
+
+    def test_macd_rising_is_bool(self):
+        s = MeanReversionStrategy("BTC/KRW")
+        df = _make_df(_flat(100))
+        sig = s.generate_signal(df)
+        assert isinstance(sig.metadata["cond"]["macd_rising"], bool)
+
+    def test_macd_declining_blocks_buy(self):
+        # Accelerating decline on last bar → MACD histogram falls → buy blocked
+        s = MeanReversionStrategy(
+            "BTC/KRW",
+            rsi_oversold_fast=89.0, rsi_oversold_slow=95.0, rsi_exit=99.9,
+            vol_mult=0.01,
+        )
+        # Steady decline then sudden acceleration on last bar
+        prices = [50000.0 * (0.99 ** i) for i in range(100)]
+        prices[-1] = prices[-2] * 0.85   # sharp drop: accelerates MACD downtrend
+        opens = [p * 0.999 for p in prices]
+        df = _make_df(prices, opens=opens, volumes=[500.0] * 100)
+        sig = s.generate_signal(df)
+        assert sig.metadata["cond"]["macd_rising"] is False
+        assert sig.action in (SignalAction.HOLD, SignalAction.SELL)
 
     def test_bearish_candle_blocks_buy(self):
         s = MeanReversionStrategy("BTC/KRW", vol_mult=0.1)

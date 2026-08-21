@@ -142,7 +142,12 @@ class PortfolioTracker:
 
         position = self._positions.pop(symbol)
         if self._store is not None:
-            self._store.delete(symbol)
+            try:
+                self._store.delete(symbol)
+            except Exception as exc:
+                self._positions[symbol] = position
+                logger.error(f"Position delete failed — rolled back in memory: {exc}", symbol=symbol)
+                raise
         gross_pnl = position.unrealized_pnl(exit_price)
         net_pnl = gross_pnl - commission
 

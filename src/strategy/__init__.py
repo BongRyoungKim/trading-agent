@@ -11,6 +11,7 @@ from src.strategy.scalping_5m import Scalping5mStrategy
 from src.strategy.mean_reversion import MeanReversionStrategy
 from src.strategy.swing_momentum import SwingMomentumStrategy
 from src.strategy.vwap_strategy import VWAPStrategy
+from src.strategy.regime_adaptive import RegimeAdaptiveStrategy
 
 __all__ = [
     "Signal",
@@ -25,6 +26,7 @@ __all__ = [
     "Scalping5mStrategy",
     "MeanReversionStrategy",
     "SwingMomentumStrategy",
+    "RegimeAdaptiveStrategy",
     "register",
     "get_strategy",
     "list_strategies",
