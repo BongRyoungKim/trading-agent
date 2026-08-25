@@ -208,16 +208,6 @@ function switchTab(name, btn) {{
 }}
 let _strategyParams = {{}};
 let _positionsMap = {{}};  // symbol → position (entry_price, amount)
-let _activeTickTab = 0;
-function switchTickTab(idx) {{
-  _activeTickTab = idx;
-  [0,1].forEach(i => {{
-    const p = document.getElementById('tick-panel-'+i);
-    const b = document.getElementById('tick-tab-'+i);
-    if (p) p.style.display = i===idx ? '' : 'none';
-    if (b) {{ b.classList.toggle('active', i===idx); }}
-  }});
-}}
 async function refresh() {{
   try {{
     const [s, pos, pnl, trades, stats, eq, bal, ticks, strat] = await Promise.all([
@@ -578,20 +568,13 @@ function renderTicks(items, flashSymbol, prevTick) {{
     </tr>`;
   }}).join('');
 
-  const groups = [items.slice(0,10), items.slice(10,20)];
-  const labels = ['1-10위', '11-20위'];
-  const tabBtns = labels.map((lbl, i) =>
-    `<button class="tab${{_activeTickTab===i?' active':''}}" id="tick-tab-${{i}}" onclick="switchTickTab(${{i}})">${{lbl}}</button>`
-  ).join('');
-  const panels = groups.map((grp, i) =>
-    `<div id="tick-panel-${{i}}" class="tick-panel"${{_activeTickTab===i?'':' style="display:none"'}}>${{
-      grp.length ? thead + mkRows(grp, i*10) + '</tbody></table>' : '<p class="empty">데이터 없음</p>'
-    }}</div>`
-  ).join('');
+  // 1-10위만 표기 (11-20위 탭은 상위 심볼 수 축소 이후 항상 비어 있어 제거됨)
+  const top10 = items.slice(0, 10);
+  const panelHtml = top10.length
+    ? thead + mkRows(top10, 0) + '</tbody></table>'
+    : '<p class="empty">데이터 없음</p>';
 
-  el.innerHTML =
-    `<div style="display:flex;gap:.5rem;margin-bottom:.75rem;border-bottom:1px solid #334155;padding-bottom:.5rem">${{tabBtns}}</div>`
-    + panels;
+  el.innerHTML = `<div id="tick-panel-0" class="tick-panel">${{panelHtml}}</div>`;
 }}
 function renderBalance(items) {{
   const el = document.getElementById('balance-body');
@@ -1191,30 +1174,15 @@ def _render_ticks(ticks: list[dict]) -> str:
             f"</tr>"
         )
 
-    groups = [ticks[0:10], ticks[10:20]]
-    labels = ["1-10위", "11-20위"]
-    tab_btns = "".join(
-        f'<button class="tab{" active" if i == 0 else ""}" id="tick-tab-{i}" '
-        f'onclick="switchTickTab({i})">{lbl}</button>'
-        for i, lbl in enumerate(labels)
-    )
-    panel_parts = []
-    for i, grp in enumerate(groups):
-        style_attr = "" if i == 0 else ' style="display:none"'
-        if grp:
-            rows_html = "".join(
-                [thead] + [_row(i * 10 + j + 1, t) for j, t in enumerate(grp)] + ["</tbody></table>"]
-            )
-        else:
-            rows_html = '<p class="empty">데이터 없음</p>'
-        panel_parts.append(
-            f'<div id="tick-panel-{i}" class="tick-panel"{style_attr}>{rows_html}</div>'
+    # 1-10위만 표기 (11-20위 탭은 상위 심볼 수 축소 이후 항상 비어 있어 제거됨)
+    top10 = ticks[0:10]
+    if top10:
+        rows_html = "".join(
+            [thead] + [_row(j + 1, t) for j, t in enumerate(top10)] + ["</tbody></table>"]
         )
-    panels = "".join(panel_parts)
-    return (
-        f'<div style="display:flex;gap:.5rem;margin-bottom:.75rem;border-bottom:1px solid #334155;padding-bottom:.5rem">{tab_btns}</div>'
-        + panels
-    )
+    else:
+        rows_html = '<p class="empty">데이터 없음</p>'
+    return f'<div id="tick-panel-0" class="tick-panel">{rows_html}</div>'
 
 
 def _render_balance(balance: list[dict]) -> str:
