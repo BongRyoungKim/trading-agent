@@ -1181,11 +1181,19 @@ def _render_ticks(ticks: list[dict]) -> str:
         f'onclick="switchTickTab({i})">{lbl}</button>'
         for i, lbl in enumerate(labels)
     )
-    panels = "".join(
-        f'<div id="tick-panel-{i}" class="tick-panel"'
-        f'{" " if i == 0 else " style=\"display:none\""}>{"".join([thead] + [_row(i*10+j+1, t) for j, t in enumerate(grp)] + ["</tbody></table>"]) if grp else "<p class=\"empty\">데이터 없음</p>"}</div>'
-        for i, grp in enumerate(groups)
-    )
+    panel_parts = []
+    for i, grp in enumerate(groups):
+        style_attr = "" if i == 0 else ' style="display:none"'
+        if grp:
+            rows_html = "".join(
+                [thead] + [_row(i * 10 + j + 1, t) for j, t in enumerate(grp)] + ["</tbody></table>"]
+            )
+        else:
+            rows_html = '<p class="empty">데이터 없음</p>'
+        panel_parts.append(
+            f'<div id="tick-panel-{i}" class="tick-panel"{style_attr}>{rows_html}</div>'
+        )
+    panels = "".join(panel_parts)
     return (
         f'<div style="display:flex;gap:.5rem;margin-bottom:.75rem;border-bottom:1px solid #334155;padding-bottom:.5rem">{tab_btns}</div>'
         + panels
