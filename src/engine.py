@@ -99,6 +99,7 @@ class TradingEngine:
         self._tick_symbols: set[str] = set()  # currently scheduled tick symbols
         self._pinned_symbols: frozenset[str] = frozenset()  # user-specified symbols; if non-empty, auto-refresh cannot add/remove them
         self._tick_interval: int = 60  # stored at start() for dynamic symbol additions
+        self._top_n_symbols: int = 20  # how many symbols _refresh_symbols() fetches by volume; set via start()
         self._ranked_symbols: list[str] = []  # 24h vol-ranked order from last refresh
         self._symbol_blacklist: frozenset[str] = frozenset()  # symbols never traded
         self._journal = (
@@ -367,6 +368,7 @@ class TradingEngine:
         pin_symbols: bool = True,
         weekly_report_day: str | None = "mon",
         weekly_report_hour: int = 9,
+        top_n_symbols: int = 20,
     ) -> None:
         """
         Start the scheduler and block until stop() is called or a termination
@@ -384,10 +386,13 @@ class TradingEngine:
             weekly_report_day:  APScheduler cron day_of_week for the weekly Telegram
                                  digest (e.g. "mon"). None disables the weekly report.
             weekly_report_hour: Hour (0-23) to send the weekly report.
+            top_n_symbols:      How many symbols _refresh_symbols() fetches by 24h
+                                 volume on each auto-refresh. Mirrors --top-symbols.
         """
         self._initial_capital = self._portfolio.cash
         self._start_time = time.monotonic()
         self._tick_interval = interval_seconds
+        self._top_n_symbols = top_n_symbols if top_n_symbols > 0 else 20
         self._tick_symbols = set(symbols)
         if pin_symbols:
             self._pinned_symbols = frozenset(symbols)
@@ -998,7 +1003,7 @@ class TradingEngine:
         scheduler to track them. Dropped symbols with open positions are kept.
         """
         try:
-            new_top: list[str] = self._exchange.get_top_symbols_by_volume(20)  # type: ignore[attr-defined]
+            new_top: list[str] = self._exchange.get_top_symbols_by_volume(self._top_n_symbols)  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Symbol refresh failed: {exc}")
             return

@@ -480,6 +480,7 @@ def main() -> None:
             pin_symbols=(args.top_symbols == 0),
             weekly_report_day=(args.weekly_report_day or None),
             weekly_report_hour=args.weekly_report_hour,
+            top_n_symbols=args.top_symbols,
         )
     finally:
         prevent_sleep.disable()
