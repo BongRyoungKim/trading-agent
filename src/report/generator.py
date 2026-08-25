@@ -407,7 +407,7 @@ class DailyReportGenerator:
                 if t["pnl"] > 0:
                     day_wins += 1
                 ep = f"{t['entry_price']:,.0f}" if t["entry_price"] else "—"
-                xp = f"{t["exit_price"]:,.0f}" if t["exit_price"] else "—"
+                xp = f"{t['exit_price']:,.0f}" if t["exit_price"] else "—"
                 et = t["entry_kst"][5:16] if t["entry_kst"] else "—"
                 xt = t["exit_kst"][5:16] if t["exit_kst"] else "—"
                 lines.append(f"| {t['symbol']} | {ep} | {xp} | {pnl_str} | {t['reason']} | {et} | {xt} |")

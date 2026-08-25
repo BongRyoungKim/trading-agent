@@ -27,11 +27,11 @@ ENV/
 .env.local
 .env.*.local
 
-# Data & logs
-data/
-logs/
-!data/.gitkeep
-!logs/.gitkeep
+# Data & logs (root-level runtime dirs only — do NOT match src/data/, tests/data/, etc.)
+/data/
+/logs/
+!/data/.gitkeep
+!/logs/.gitkeep
 *.csv
 *.db
 *.sqlite
