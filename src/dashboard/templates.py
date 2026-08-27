@@ -432,13 +432,13 @@ function renderStats(stats) {{
   const total = stats.total_trades || 0;
   if (!total) {{ el.innerHTML = '<h2>성과 분석</h2><p class="empty">거래 없음</p>'; return; }}
   const wr = stats.win_rate_pct || 0;
-  const pf = stats.profit_factor || 0;
+  const pf = stats.profit_factor;  // null = 손실 거래 0건(무한대), state.py에서 그렇게 인코딩
   const avgWin = stats.avg_win || 0;
   const avgLoss = stats.avg_loss || 0;
   const totalPnl = stats.total_pnl || 0;
   const wrColor = wr>=50?'#10b981':'#ef4444';
-  const pfColor = pf>=1?'#10b981':'#ef4444';
-  const pfDisplay = pf>=999?'∞':pf.toFixed(2);
+  const pfColor = (pf===null||pf>=1)?'#10b981':'#ef4444';
+  const pfDisplay = pf===null?'∞':pf.toFixed(2);
   const pnlCls = totalPnl>=0?'win':'loss';
   const sign = totalPnl>=0?'+':'';
   const fmtKRW = v => Math.round(Math.abs(v)).toLocaleString('ko-KR');
@@ -903,7 +903,7 @@ def _render_stats(stats: dict) -> str:
     total_pnl = stats.get("total_pnl", 0.0)
 
     wr_color = "#10b981" if wr >= 50 else "#ef4444"
-    pf_display = f"{pf:.2f}" if pf != float("inf") else "∞"
+    pf_display = f"{pf:.2f}" if pf is not None else "∞"
     pnl_class = "win" if total_pnl >= 0 else "loss"
     sign = "+" if total_pnl >= 0 else ""
 

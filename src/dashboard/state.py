@@ -6,6 +6,7 @@ through this singleton — keeping the web layer decoupled from the engine.
 """
 from __future__ import annotations
 
+import math
 import queue
 import threading
 from typing import TYPE_CHECKING
@@ -153,11 +154,23 @@ class DashboardState:
         return result
 
     def get_stats(self) -> dict:
-        """Return journal statistics (win rate, profit factor, etc.)."""
+        """Return journal statistics (win rate, profit factor, etc.).
+
+        journal.stats()의 profit_factor는 손실 거래가 하나도 없으면
+        수학적으로 float("inf")가 된다. 이 값을 그대로 JSONResponse에
+        태우면 Starlette가 allow_nan=False로 직렬화하다가
+        "Out of range float values are not JSON compliant" 500 에러를
+        던지므로(/api/stats), 여기서 None으로 치환해 API/템플릿 양쪽에서
+        "무한대"를 나타내는 공통 값으로 쓴다.
+        """
         eng = self.engine
         if eng is None:
             return {}
-        return eng.journal.stats()  # noqa: SLF001
+        stats = dict(eng.journal.stats())  # noqa: SLF001
+        pf = stats.get("profit_factor")
+        if pf is not None and not math.isfinite(pf):
+            stats["profit_factor"] = None
+        return stats
 
     def get_equity_curve(self) -> list[dict]:
         """Return daily PnL data points for charting (one entry per day)."""
