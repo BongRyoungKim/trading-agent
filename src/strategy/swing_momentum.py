@@ -163,7 +163,10 @@ class SwingMomentumStrategy(BaseStrategy):
         macd_df    = macd(close, self._macd_fast, self._macd_slow, self._macd_signal)
         atr_series = atr(high, low, close, self._atr_period)
         adx_series = calc_adx(high, low, close)
-        vol_avg    = volume.rolling(self._vol_lookback).mean()
+        # shift(1): 현재 봉을 제외한 이전 vol_lookback개 봉의 평균 — 현재 봉을
+        # 자기 자신의 기준선에 포함시키면 급증분이 평균을 같이 끌어올려
+        # vol_ratio가 실제보다 낮게 계산되는 문제가 있었음.
+        vol_avg    = volume.shift(1).rolling(self._vol_lookback).mean()
 
         # 현재값
         price_now    = float(close.iloc[-1])

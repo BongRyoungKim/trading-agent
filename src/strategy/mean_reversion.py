@@ -139,7 +139,10 @@ class MeanReversionStrategy(BaseStrategy):
         rsi_slow   = calc_rsi(close, self._rsi_slow_period)
         atr_series = atr(high, low, close, self._atr_period)
         macd_df    = calc_macd(close)
-        vol_avg    = volume.rolling(self._vol_lookback).mean()
+        # shift(1): 현재 봉을 제외한 이전 vol_lookback개 봉의 평균 — 현재 봉을
+        # 자기 자신의 기준선에 포함시키면 급증분이 평균을 같이 끌어올려
+        # vol_ratio가 실제보다 낮게 계산되는 문제가 있었음.
+        vol_avg    = volume.shift(1).rolling(self._vol_lookback).mean()
 
         rsi_f_now  = float(rsi_fast.iloc[-1])
         rsi_s_now  = float(rsi_slow.iloc[-1])
