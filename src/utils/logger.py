@@ -12,6 +12,30 @@ from loguru import logger
 
 from src.config.settings import get_settings
 
+_BASE_FORMAT = (
+    "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+    "<level>{level: <8}</level> | "
+    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+    "<level>{message}</level>"
+)
+
+
+def _format_record(record: dict) -> str:
+    """
+    loguru의 기본 포맷은 {message}만 렌더링해서, logger.warning("...", func=...,
+    error=..., issues=...)처럼 넘긴 구조화 필드(extra)가 로그에 전혀 찍히지 않는
+    문제가 있었다("Retryable error, backing off" / "Data quality issues — skipping
+    tick" 등에서 실제 원인이 안 보였음). extra가 있으면 줄 끝에 key=value로 붙여
+    보이게 한다. extra 값(예외 메시지 등)에 '{'/'}' 리터럴이 섞여 있으면 loguru가
+    포맷 필드로 오인해 에러를 내므로 이스케이프 처리한다.
+    """
+    fmt = _BASE_FORMAT
+    if record["extra"]:
+        pairs = " ".join(f"{k}={v}" for k, v in record["extra"].items())
+        pairs = pairs.replace("{", "{{").replace("}", "}}")
+        fmt += f" | <dim>{pairs}</dim>"
+    return fmt + "\n{exception}"
+
 
 def setup_logger() -> None:
     """
@@ -23,12 +47,7 @@ def setup_logger() -> None:
     # Remove loguru's default handler to avoid duplicate output
     logger.remove()
 
-    log_format = (
-        "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-        "<level>{level: <8}</level> | "
-        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-        "<level>{message}</level>"
-    )
+    log_format = _format_record
 
     # Console sink (stderr, colorized)
     logger.add(
