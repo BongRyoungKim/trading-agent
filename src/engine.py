@@ -369,6 +369,8 @@ class TradingEngine:
         weekly_report_day: str | None = "mon",
         weekly_report_hour: int = 9,
         top_n_symbols: int = 20,
+        news_tuning_hour: int | None = None,
+        news_tuning_dry_run: bool = True,
     ) -> None:
         """
         Start the scheduler and block until stop() is called or a termination
@@ -388,11 +390,19 @@ class TradingEngine:
             weekly_report_hour: Hour (0-23) to send the weekly report.
             top_n_symbols:      How many symbols _refresh_symbols() fetches by 24h
                                  volume on each auto-refresh. Mirrors --top-symbols.
+            news_tuning_hour:   KST hour (0-23) to run the daily news-sentiment
+                                 auto-tuner. None (default) disables it entirely —
+                                 opt-in only.
+            news_tuning_dry_run: If True (default), the news tuner only computes
+                                 and reports what it would change without applying
+                                 it. Set False once you've watched it run for a
+                                 while and trust the adjustments.
         """
         self._initial_capital = self._portfolio.cash
         self._start_time = time.monotonic()
         self._tick_interval = interval_seconds
         self._top_n_symbols = top_n_symbols if top_n_symbols > 0 else 20
+        self._news_tuning_dry_run = news_tuning_dry_run
         self._tick_symbols = set(symbols)
         if pin_symbols:
             self._pinned_symbols = frozenset(symbols)
@@ -487,6 +497,20 @@ class TradingEngine:
             )
             logger.info(
                 "Weekly report scheduled", day=weekly_report_day, hour=weekly_report_hour
+            )
+
+        if news_tuning_hour is not None:
+            self._scheduler.add_job(
+                self._run_news_tuning,
+                trigger="cron",
+                hour=news_tuning_hour,
+                minute=0,
+                id="news_tuning",
+            )
+            logger.info(
+                "Daily news-sentiment tuning scheduled",
+                hour=news_tuning_hour,
+                dry_run=news_tuning_dry_run,
             )
 
         if self._market_hours.enabled and self._telegram.is_enabled:
@@ -1121,6 +1145,25 @@ class TradingEngine:
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to send daily Telegram report", error=str(exc))
+
+    # ── Internal: daily news-sentiment tuning ─────────────────────────────────
+
+    def _run_news_tuning(self) -> None:
+        """
+        Scheduled job (1일 1회): RSS 뉴스 헤드라인의 강세/약세 키워드 빈도로
+        감성 점수를 내고, ScheduledTaskRunner(거래 건수 기준)와 별개로
+        Vol/RSI 진입 문턱을 조정한다. dry_run=True(기본값)면 실제로 반영하지
+        않고 텔레그램으로 시뮬레이션 결과만 보낸다.
+        """
+        try:
+            from src.report.news_tuner import run_daily_news_tuning  # noqa: PLC0415
+
+            result = run_daily_news_tuning(dry_run=self._news_tuning_dry_run)
+            logger.info("News tuning result", status=result.status, detail=result.detail)
+            if self._telegram.is_enabled:
+                self._telegram.send(result.to_telegram())
+        except Exception as exc:  # noqa: BLE001
+            logger.error("News tuning job failed", error=str(exc))
 
     # ── Internal: auto-tuning restart watch ──────────────────────────────────
 

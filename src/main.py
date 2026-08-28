@@ -226,6 +226,27 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="weekly_report_hour",
         help="Hour (0-23) to send the weekly Telegram report (default: 9).",
     )
+    p.add_argument(
+        "--news-tuning-hour",
+        type=int,
+        default=None,
+        dest="news_tuning_hour",
+        help=(
+            "KST hour (0-23) to run the daily news-sentiment auto-tuner "
+            "(default: None = disabled). Adjusts mr_vol_mult/sm_vol_mult/"
+            "mr_rsi_oversold_fast/slow based on RSS keyword sentiment."
+        ),
+    )
+    p.add_argument(
+        "--news-tuning-apply",
+        action="store_true",
+        dest="news_tuning_apply",
+        help=(
+            "Actually apply the daily news-sentiment tuner's adjustments. "
+            "Without this flag, --news-tuning-hour runs in dry-run mode "
+            "(reports what it would change via Telegram, applies nothing)."
+        ),
+    )
     return p
 
 
@@ -481,6 +502,8 @@ def main() -> None:
             weekly_report_day=(args.weekly_report_day or None),
             weekly_report_hour=args.weekly_report_hour,
             top_n_symbols=args.top_symbols,
+            news_tuning_hour=args.news_tuning_hour,
+            news_tuning_dry_run=not args.news_tuning_apply,
         )
     finally:
         prevent_sleep.disable()

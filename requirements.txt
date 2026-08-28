@@ -20,6 +20,9 @@ loguru>=0.7.2
 # Scheduling
 apscheduler>=3.10.4
 
+# News RSS parsing (daily news-sentiment auto-tuning)
+feedparser>=6.0.10
+
 # Visualization (optional — only needed for BacktestVisualizer)
 matplotlib>=3.8.0
 

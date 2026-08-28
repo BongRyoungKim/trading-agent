@@ -49,11 +49,16 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 # 자동 재조정이 절대 벗어날 수 없는 안전 범위.
 PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "adx_trend_threshold":  (15.0, 35.0),
-    "mr_vol_mult":          (1.0, 3.0),
+    # mr_vol_mult/sm_vol_mult 하한을 0.3까지 낮춤: 거래량 부족으로 BUY가 전혀
+    # 안 나와 운영값을 0.5/0.4까지 수동으로 내려둔 상태였는데, 기존 하한(1.0)이
+    # 그보다 높아서 propose_and_apply()가 처음 호출되는 순간 클램프에 의해
+    # 0.5/0.4가 1.0으로 강제로 튀어 오르는 문제가 있었다(±20% 스텝캡을 클램프가
+    # 덮어씀). 지금 운영 중인 값을 안전 범위 안에 포함시키기 위한 수정.
+    "mr_vol_mult":          (0.3, 3.0),
     "mr_rsi_oversold_fast": (10.0, 30.0),
     "mr_rsi_oversold_slow": (20.0, 40.0),
     "mr_rsi_exit":          (45.0, 65.0),
-    "sm_vol_mult":          (1.0, 3.0),
+    "sm_vol_mult":          (0.3, 3.0),
     "sm_adx_threshold":     (20.0, 35.0),
     "sl_floor_pct":         (2.0, 4.0),
     "sl_ceiling_pct":       (1.0, 2.0),
