@@ -7,7 +7,7 @@ from __future__ import annotations
 import signal
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 
@@ -431,11 +431,19 @@ class TradingEngine:
             strategy=strategy_name,
         )
 
-        for sym in symbols:
+        # 심볼별 tick 작업을 모두 같은 순간에 등록하면 APScheduler가 매 사이클마다
+        # N개 심볼의 API 호출(get_ohlcv 등)을 거의 동시에(같은 1~2초 안에) 실행해
+        # 거래소 초당 rate limit을 넘겨 "Retryable error, backing off"(429)가
+        # 반복됐다. interval_seconds를 심볼 수만큼 균등 분산해 각 심볼의 최초
+        # 실행 시각을 stagger_seconds씩 어긋나게 잡아 호출을 고르게 퍼뜨린다.
+        stagger_seconds = interval_seconds / len(symbols) if symbols else 0.0
+        now = datetime.now(UTC)
+        for i, sym in enumerate(symbols):
             self._scheduler.add_job(
                 self.tick,
                 trigger="interval",
                 seconds=interval_seconds,
+                next_run_time=now + timedelta(seconds=i * stagger_seconds),
                 args=[sym],
                 id=f"tick_{sym.replace('/', '_')}",
                 max_instances=1,
@@ -1033,13 +1041,18 @@ class TradingEngine:
             self._latest_ticks.pop(sym, None)
             actually_removed.add(sym)
 
-        # Add new symbols
-        for sym in added:
+        # Add new symbols — 초기 등록 때와 동일한 이유로, 새로 추가되는 심볼들의
+        # 최초 실행 시각도 서로 어긋나게 분산해 API 호출이 한 번에 몰리지 않게 한다.
+        added_list = list(added)
+        stagger_seconds = self._tick_interval / len(added_list) if added_list else 0.0
+        now = datetime.now(UTC)
+        for i, sym in enumerate(added_list):
             job_id = f"tick_{sym.replace('/', '_')}"
             self._scheduler.add_job(
                 self.tick,
                 trigger="interval",
                 seconds=self._tick_interval,
+                next_run_time=now + timedelta(seconds=i * stagger_seconds),
                 args=[sym],
                 id=job_id,
                 max_instances=1,
