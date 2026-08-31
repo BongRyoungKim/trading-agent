@@ -263,3 +263,83 @@ class TestUpbitClient:
         ticker = upbit_client.get_ticker("BTC/KRW")
         assert ticker.symbol == "BTC/KRW"
         assert ticker.last == Decimal("50000.0")
+
+
+class TestGetTopSymbolsByVolume:
+    """
+    SKR/KRW 사고(24h 거래대금 2위였는데 진입 4분 만에 손절가를 뚫고 급락 —
+    실제로는 고가/저가 범위가 60%에 달하는 펌프/덤프 종목이었음) 이후 추가된
+    변동성 필터 검증.
+    """
+
+    def _setup(self, mock_ccxt_upbit: MagicMock, tickers: dict) -> None:
+        mock_ccxt_upbit.markets = {sym: {} for sym in tickers}
+        mock_ccxt_upbit.fetch_tickers.return_value = tickers
+
+    def test_excludes_symbol_exceeding_volatility_cap(
+        self, upbit_client: UpbitClient, mock_ccxt_upbit: MagicMock
+    ) -> None:
+        # SKR: 거래대금 1위지만 high/low 범위 60% (실제 사고 재현) → 제외돼야 함
+        # BTC: 거래대금 2위, 범위 1.5% (정상) → 통과해야 함
+        self._setup(
+            mock_ccxt_upbit,
+            {
+                "SKR/KRW": {"quoteVolume": 200_000_000_000, "high": 48.8, "low": 30.5},
+                "BTC/KRW": {"quoteVolume": 100_000_000_000, "high": 108862000, "low": 107255000},
+            },
+        )
+        result = upbit_client.get_top_symbols_by_volume(n=10, max_volatility_pct=20.0)
+        assert "SKR/KRW" not in result
+        assert result == ["BTC/KRW"]
+
+    def test_default_cap_is_20_pct(
+        self, upbit_client: UpbitClient, mock_ccxt_upbit: MagicMock
+    ) -> None:
+        self._setup(
+            mock_ccxt_upbit,
+            {
+                "SKR/KRW": {"quoteVolume": 200_000_000_000, "high": 48.8, "low": 30.5},
+                "BTC/KRW": {"quoteVolume": 100_000_000_000, "high": 108862000, "low": 107255000},
+            },
+        )
+        result = upbit_client.get_top_symbols_by_volume(n=10)  # max_volatility_pct 기본값
+        assert result == ["BTC/KRW"]
+
+    def test_zero_or_negative_cap_disables_filter(
+        self, upbit_client: UpbitClient, mock_ccxt_upbit: MagicMock
+    ) -> None:
+        self._setup(
+            mock_ccxt_upbit,
+            {
+                "SKR/KRW": {"quoteVolume": 200_000_000_000, "high": 48.8, "low": 30.5},
+                "BTC/KRW": {"quoteVolume": 100_000_000_000, "high": 108862000, "low": 107255000},
+            },
+        )
+        result = upbit_client.get_top_symbols_by_volume(n=10, max_volatility_pct=0)
+        assert result == ["SKR/KRW", "BTC/KRW"]
+
+    def test_missing_high_low_passes_through(
+        self, upbit_client: UpbitClient, mock_ccxt_upbit: MagicMock
+    ) -> None:
+        """high/low 정보가 없는 종목(신규상장 등)은 보수적으로 통과시킨다."""
+        self._setup(
+            mock_ccxt_upbit,
+            {"NEW/KRW": {"quoteVolume": 50_000_000_000}},
+        )
+        result = upbit_client.get_top_symbols_by_volume(n=10, max_volatility_pct=20.0)
+        assert result == ["NEW/KRW"]
+
+    def test_still_respects_n_after_filtering(
+        self, upbit_client: UpbitClient, mock_ccxt_upbit: MagicMock
+    ) -> None:
+        self._setup(
+            mock_ccxt_upbit,
+            {
+                "SKR/KRW": {"quoteVolume": 300_000_000_000, "high": 48.8, "low": 30.5},  # excluded
+                "BTC/KRW": {"quoteVolume": 200_000_000_000, "high": 108862000, "low": 107255000},
+                "XRP/KRW": {"quoteVolume": 100_000_000_000, "high": 1905, "low": 1860},
+                "ETH/KRW": {"quoteVolume": 50_000_000_000, "high": 5000000, "low": 4950000},
+            },
+        )
+        result = upbit_client.get_top_symbols_by_volume(n=2, max_volatility_pct=20.0)
+        assert result == ["BTC/KRW", "XRP/KRW"]

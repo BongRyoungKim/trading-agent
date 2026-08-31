@@ -164,11 +164,22 @@ class UpbitClient(BaseExchangeClient):
             raise _map_ccxt_exception(exc, f"get_ticker:{symbol}") from exc
 
     @retry(max_attempts=3, base_delay=2.0)
-    def get_top_symbols_by_volume(self, n: int = 20) -> list[str]:
+    def get_top_symbols_by_volume(
+        self, n: int = 20, max_volatility_pct: float = 20.0
+    ) -> list[str]:
         """
         Return top N active KRW-market symbols ranked by 24h quote volume.
         Fetches only KRW markets to avoid Upbit's URL length limit (HTTP 400)
         that occurs when all BTC/KRW/USDT markets are passed in one request.
+
+        Symbols whose 24h (high-low)/low range exceeds *max_volatility_pct*
+        are excluded regardless of rank. 거래대금 상위권이라고 해서 다 안전한
+        건 아니다 — 순간 급등락(펌프/덤프) 중인 종목은 거래량이 커도 가격이
+        튀어 손절 주문이 설정가보다 훨씬 나쁜 가격에 체결(슬리피지)되기
+        쉽다(실제로 SKR/KRW가 24h 거래대금 2위였는데도 진입 4분 만에 손절가를
+        뚫고 급락해 큰 손실이 난 사고가 있었음 — 그 시점 SKR의 24h 고가/저가
+        범위는 약 60%였다). 24h 순변동률(%change)만으로는 이런 왕복성 급등락을
+        못 잡아내서(오르고 내리면 순변동은 작게 나옴) high/low 범위를 쓴다.
         """
         try:
             if not self._exchange.markets:
@@ -179,7 +190,9 @@ class UpbitClient(BaseExchangeClient):
                 (
                     (sym, float(data.get("quoteVolume") or 0))
                     for sym, data in tickers.items()
-                    if sym.endswith("/KRW") and (data.get("quoteVolume") or 0) > 0
+                    if sym.endswith("/KRW")
+                    and (data.get("quoteVolume") or 0) > 0
+                    and _within_volatility_limit(data, max_volatility_pct)
                 ),
                 key=lambda x: x[1],
                 reverse=True,
@@ -187,3 +200,20 @@ class UpbitClient(BaseExchangeClient):
             return [sym for sym, _ in ranked[:n]]
         except Exception as exc:
             raise _map_ccxt_exception(exc, "get_top_symbols_by_volume") from exc
+
+
+def _within_volatility_limit(ticker: dict, max_pct: float) -> bool:
+    """ccxt 티커의 24h high/low 범위가 max_pct(%) 이하인지 확인.
+
+    high/low 정보가 없으면(일부 신규 상장 종목 등) 보수적으로 통과시킨다 —
+    데이터 부족을 이유로 걸러내면 오히려 거래대금 상위 종목이 대거 누락될
+    수 있어서다. max_pct <= 0이면 필터를 사실상 끈다(항상 통과).
+    """
+    if max_pct <= 0:
+        return True
+    high = ticker.get("high")
+    low = ticker.get("low")
+    if not high or not low or low <= 0:
+        return True
+    range_pct = (float(high) - float(low)) / float(low) * 100
+    return range_pct <= max_pct

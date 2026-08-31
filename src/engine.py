@@ -100,6 +100,7 @@ class TradingEngine:
         self._pinned_symbols: frozenset[str] = frozenset()  # user-specified symbols; if non-empty, auto-refresh cannot add/remove them
         self._tick_interval: int = 60  # stored at start() for dynamic symbol additions
         self._top_n_symbols: int = 20  # how many symbols _refresh_symbols() fetches by volume; set via start()
+        self._max_symbol_volatility_pct: float = 20.0  # 24h high/low range cap for symbol selection; set via start()
         self._ranked_symbols: list[str] = []  # 24h vol-ranked order from last refresh
         self._symbol_blacklist: frozenset[str] = frozenset()  # symbols never traded
         self._journal = (
@@ -369,6 +370,7 @@ class TradingEngine:
         weekly_report_day: str | None = "mon",
         weekly_report_hour: int = 9,
         top_n_symbols: int = 20,
+        max_symbol_volatility_pct: float = 20.0,
         news_tuning_hour: int | None = None,
         news_tuning_dry_run: bool = True,
     ) -> None:
@@ -390,6 +392,11 @@ class TradingEngine:
             weekly_report_hour: Hour (0-23) to send the weekly report.
             top_n_symbols:      How many symbols _refresh_symbols() fetches by 24h
                                  volume on each auto-refresh. Mirrors --top-symbols.
+            max_symbol_volatility_pct: 24h (high-low)/low 범위가 이 값(%)을 넘는
+                                 종목은 거래대금 순위와 무관하게 자동선정에서
+                                 제외한다. 펌프/덤프성 급등락 종목이 거래대금만
+                                 크다는 이유로 뽑혀 손절 슬리피지 사고를 내는 걸
+                                 막기 위함. 0 이하로 주면 필터를 끈다.
             news_tuning_hour:   KST hour (0-23) to run the daily news-sentiment
                                  auto-tuner. None (default) disables it entirely —
                                  opt-in only.
@@ -402,6 +409,7 @@ class TradingEngine:
         self._start_time = time.monotonic()
         self._tick_interval = interval_seconds
         self._top_n_symbols = top_n_symbols if top_n_symbols > 0 else 20
+        self._max_symbol_volatility_pct = max_symbol_volatility_pct
         self._news_tuning_dry_run = news_tuning_dry_run
         self._tick_symbols = set(symbols)
         if pin_symbols:
@@ -1035,7 +1043,9 @@ class TradingEngine:
         scheduler to track them. Dropped symbols with open positions are kept.
         """
         try:
-            new_top: list[str] = self._exchange.get_top_symbols_by_volume(self._top_n_symbols)  # type: ignore[attr-defined]
+            new_top: list[str] = self._exchange.get_top_symbols_by_volume(  # type: ignore[attr-defined]
+                self._top_n_symbols, max_volatility_pct=self._max_symbol_volatility_pct
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Symbol refresh failed: {exc}")
             return

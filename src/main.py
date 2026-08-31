@@ -177,6 +177,18 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--max-symbol-volatility-pct",
+        type=float,
+        default=20.0,
+        dest="max_symbol_volatility_pct",
+        help=(
+            "top-N 자동선정 시 24h (고가-저가)/저가 범위가 이 값(%%)을 넘는 "
+            "종목은 거래대금 순위와 무관하게 제외한다 (default: 20.0). "
+            "펌프/덤프성 급등락 종목이 거래대금만 높다는 이유로 뽑혀 손절 "
+            "슬리피지 사고를 내는 걸 막기 위함. 0 이하로 주면 필터를 끈다."
+        ),
+    )
+    p.add_argument(
         "--exclude-symbols",
         nargs="+",
         default=[],
@@ -502,6 +514,7 @@ def main() -> None:
             weekly_report_day=(args.weekly_report_day or None),
             weekly_report_hour=args.weekly_report_hour,
             top_n_symbols=args.top_symbols,
+            max_symbol_volatility_pct=args.max_symbol_volatility_pct,
             news_tuning_hour=args.news_tuning_hour,
             news_tuning_dry_run=not args.news_tuning_apply,
         )
