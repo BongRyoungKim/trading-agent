@@ -17,6 +17,19 @@ services:
       retries: 3
     command: ["--mode", "paper", "--symbols", "BTC/USDT", "ETH/USDT", "--interval", "60"]
 
+  # 브레이크아웃 조기진입 페이퍼 스캐너 — trading-agent와 완전히 독립된 프로세스.
+  # 라이브 자본에 손대지 않고(PAPER 전용), 이 서비스만 따로 재시작/재배포해도
+  # trading-agent 서비스는 전혀 영향받지 않는다.
+  #   docker compose up -d --build breakout-scanner
+  breakout-scanner:
+    build: .
+    env_file: .env
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "src.breakout.runner"]
+    command: []
+
   # Run a one-shot backtest and exit
   backtest:
     build: .

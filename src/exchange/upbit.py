@@ -201,6 +201,37 @@ class UpbitClient(BaseExchangeClient):
         except Exception as exc:
             raise _map_ccxt_exception(exc, "get_top_symbols_by_volume") from exc
 
+    @retry(max_attempts=3, base_delay=2.0)
+    def get_liquid_symbols(self, min_quote_volume_krw: float) -> list[str]:
+        """
+        24h 거래대금(원)이 min_quote_volume_krw 이상인 모든 KRW 마켓 심볼을
+        거래대금 내림차순으로 반환한다.
+
+        get_top_symbols_by_volume()과 달리 변동성 필터를 적용하지 않는다 —
+        이 메서드는 브레이크아웃 조기진입 모듈(src/breakout/)의 1차(넓은)
+        후보 필터용이고, 그 모듈은 오히려 변동성이 큰 종목을 찾아내는 게
+        목적이라 여기서 걸러내면 안 된다. 라이브 엔진의 심볼 자동선정과는
+        완전히 별개 용도.
+        """
+        try:
+            if not self._exchange.markets:
+                self._exchange.load_markets()
+            krw_symbols = [s for s in self._exchange.markets if s.endswith("/KRW")]
+            tickers = self._exchange.fetch_tickers(krw_symbols)
+            ranked = sorted(
+                (
+                    (sym, float(data.get("quoteVolume") or 0))
+                    for sym, data in tickers.items()
+                    if sym.endswith("/KRW")
+                    and float(data.get("quoteVolume") or 0) >= min_quote_volume_krw
+                ),
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            return [sym for sym, _ in ranked]
+        except Exception as exc:
+            raise _map_ccxt_exception(exc, "get_liquid_symbols") from exc
+
 
 def _within_volatility_limit(ticker: dict, max_pct: float) -> bool:
     """ccxt 티커의 24h high/low 범위가 max_pct(%) 이하인지 확인.
