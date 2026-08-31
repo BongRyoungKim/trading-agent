@@ -127,6 +127,7 @@ class BreakoutScanner:
 
     def scan_for_entries(self) -> None:
         if len(self._breakout_positions) >= self._scanner_cfg.max_concurrent_positions:
+            logger.debug("Breakout: max concurrent positions reached, skipping scan")
             return
 
         try:
@@ -135,6 +136,8 @@ class BreakoutScanner:
             logger.warning("Breakout: candidate scan failed", error=str(exc))
             return
 
+        checked = 0
+        opened = 0
         for symbol in candidates:
             if len(self._breakout_positions) >= self._scanner_cfg.max_concurrent_positions:
                 break
@@ -144,12 +147,24 @@ class BreakoutScanner:
             df = self._fetch_ohlcv_df(symbol)
             if df is None:
                 continue
+            checked += 1
 
             signal = detect_breakout(df, symbol, self._detector_cfg)
             if signal is None:
                 continue
 
             self._open_position(symbol, signal)
+            opened += 1
+
+        # 스캔 사이클마다(기본 5분) 한 번씩 남기는 요약 로그 — 프로세스가 조용히
+        # 죽어있는 건지 "신호가 없어서 조용한" 정상 상태인지 로그만으로 구분 가능하게.
+        logger.info(
+            "Breakout scan cycle complete",
+            candidates_liquid=len(candidates),
+            candidates_checked=checked,
+            positions_opened_this_cycle=opened,
+            open_positions=len(self._breakout_positions),
+        )
 
     def _fetch_ohlcv_df(self, symbol: str) -> pd.DataFrame | None:
         limit = self._detector_cfg.base_window_bars + self._scanner_cfg.ohlcv_limit_buffer

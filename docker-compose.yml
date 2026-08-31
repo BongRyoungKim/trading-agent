@@ -27,6 +27,10 @@ services:
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped
+    # Dockerfile의 HEALTHCHECK는 :8080/health를 찌르지만 이 서비스는 대시보드/
+    # 헬스서버를 띄우지 않는 순수 스캐너라 항상 실패로 뜬다 — 오탐이므로 끔.
+    healthcheck:
+      disable: true
     entrypoint: ["python", "-m", "src.breakout.runner"]
     command: []
 
