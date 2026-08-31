@@ -115,8 +115,8 @@ def render_dashboard(
     .tick-live-dot{{display:inline-block;width:7px;height:7px;border-radius:50%;background:#10b981;margin-right:.4rem;animation:pulse 2s infinite}}
     @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
     .toast{{position:fixed;bottom:2rem;right:2rem;background:#334155;padding:.7rem 1.2rem;border-radius:.5rem;font-size:.875rem;display:none;z-index:99}}
-    /* SVG chart */
-    .chart-wrap{{width:100%;overflow:hidden;background:#0f172a;border-radius:.75rem;margin-top:.5rem;padding:.5rem}}
+    /* SVG chart — 모바일에서 텍스트가 안 뭉개지게 가로 스크롤 허용(아래 미디어쿼리에서 min-width 지정) */
+    .chart-wrap{{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;background:#0f172a;border-radius:.75rem;margin-top:.5rem;padding:.5rem}}
     svg{{width:100%;height:auto;display:block}}
     /* Stats grid */
     .stats-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;margin-top:.25rem}}
@@ -127,6 +127,33 @@ def render_dashboard(
     .wr-bar{{height:6px;background:#1e293b;border-radius:9999px;overflow:hidden;margin-top:.4rem}}
     .wr-fill{{height:100%;border-radius:9999px;transition:width .6s ease}}
     code{{background:#0f172a;padding:.1rem .3rem;border-radius:.25rem;font-size:.8rem}}
+    /* 2컬럼 레이아웃 (엔진상태+포트폴리오, 성과분석 승률박스 등) — 데스크톱 기본값,
+       모바일에서는 아래 미디어쿼리로 1~2컬럼으로 접는다 */
+    .row-2{{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;margin-bottom:1.2rem}}
+    .pnl-grid{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-top:.6rem}}
+    .stats-flex{{display:grid;grid-template-columns:150px 1fr;gap:1.5rem;align-items:center;margin-top:.6rem}}
+    .stat-box-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem}}
+    /* 표가 있는 영역은 화면이 좁아지면 컬럼을 찌그러뜨리는 대신 옆으로 스크롤되게 함 */
+    #ticks-body,#tab-positions,#tab-buys,#tab-sells{{overflow-x:auto;-webkit-overflow-scrolling:touch}}
+
+    /* ── 모바일 (폭 640px 이하: 대부분의 스마트폰) ─────────────────────────── */
+    @media (max-width: 640px) {{
+      header{{padding:.75rem 1rem;flex-wrap:wrap;row-gap:.3rem}}
+      header h1{{font-size:1rem}}
+      main{{padding:1rem .75rem}}
+      .card{{padding:1rem}}
+      .row-2{{grid-template-columns:1fr;gap:.9rem}}
+      .pnl-grid{{grid-template-columns:1fr 1fr;gap:.5rem}}
+      .stats-flex{{grid-template-columns:1fr;gap:.9rem}}
+      .stat-box-grid{{grid-template-columns:1fr 1fr}}
+      .criteria-grid{{grid-template-columns:1fr;gap:1.2rem}}
+      .stat-box .val{{font-size:1.05rem}}
+      /* 표는 컬럼이 많아 그대로 찌그러지면 못 읽으므로, 최소 너비를 줘서
+         좁은 화면에서는 컬럼 폭을 유지한 채 옆으로 스크롤하게 만든다 */
+      #ticks-body table{{min-width:720px}}
+      #tab-positions table,#tab-buys table,#tab-sells table{{min-width:600px}}
+      .chart-wrap svg{{min-width:700px}}
+    }}
   </style>
 </head>
 <body>
@@ -136,7 +163,7 @@ def render_dashboard(
 </header>
 <main>
   <!-- Row 1: 엔진상태 + 포트폴리오 -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;margin-bottom:1.2rem">
+  <div class="row-2">
     <div class="card" id="status-card">
       <h2>엔진 상태</h2>
       <div class="stat-row"><span class="stat-label">모드</span>{mode_badge}</div>
@@ -407,7 +434,7 @@ function renderPnl(pnl) {{
   }};
   el.innerHTML = `
     <h2>포트폴리오</h2>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-top:.6rem">
+    <div class="pnl-grid">
       <div class="stat-box">
         <div class="val" style="font-size:1rem;color:#f1f5f9">${{fmtKRW(cash)}}</div>
         <div class="lbl">현금 잔고</div>
@@ -445,14 +472,14 @@ function renderStats(stats) {{
   const wins = Math.round(total*wr/100);
   el.innerHTML = `
     <h2>성과 분석</h2>
-    <div style="display:grid;grid-template-columns:150px 1fr;gap:1.5rem;align-items:center;margin-top:.6rem">
+    <div class="stats-flex">
       <div style="text-align:center">
         <div style="font-size:2.4rem;font-weight:800;color:${{wrColor}};line-height:1.1">${{wr.toFixed(1)}}%</div>
         <div style="font-size:.7rem;color:#64748b;margin:.25rem 0 .3rem">승률</div>
         <div class="wr-bar"><div class="wr-fill" style="width:${{wr}}%;background:${{wrColor}}"></div></div>
         <div style="font-size:.68rem;color:#475569;margin-top:.45rem">${{wins}}승 · ${{total-wins}}패 · 총 ${{total}}건</div>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem">
+      <div class="stat-box-grid">
         <div class="stat-box">
           <div class="val" style="color:${{pfColor}}">${{pfDisplay}}</div>
           <div class="lbl">수익 팩터</div>
