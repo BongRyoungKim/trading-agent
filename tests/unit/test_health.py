@@ -2,13 +2,23 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
+import time
 import urllib.request
 from http.server import HTTPServer
 
 import pytest
 
+import src.health as health_module
 from src.health import HealthState, _HealthHandler, get_health_state, start_health_server
+
+
+def _free_port() -> int:
+    """OS가 즉시 하나 배정해주는 사용 가능한 포트를 얻는다(테스트 전용)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 # ── HealthState ───────────────────────────────────────────────────────────────
@@ -186,3 +196,69 @@ class TestStartHealthServer:
             assert body["status"] == "ok"
         finally:
             server.shutdown()
+
+
+# ── Watchdog self-healing ─────────────────────────────────────────────────────
+
+class TestWatchdog:
+    def test_shutdown_disables_watchdog_no_respawn(self, monkeypatch):
+        """의도적인 shutdown()은 watchdog까지 같이 멈춰야 한다(되살아나면 안 됨)."""
+        created: list[HTTPServer] = []
+        real_ctor = health_module.HTTPServer
+
+        def tracking_ctor(*args, **kwargs):
+            srv = real_ctor(*args, **kwargs)
+            created.append(srv)
+            return srv
+
+        monkeypatch.setattr(health_module, "HTTPServer", tracking_ctor)
+
+        port = _free_port()
+        server = start_health_server(host="127.0.0.1", port=port, watchdog_interval=0.05)
+        server.shutdown()
+        time.sleep(0.3)  # watchdog이 잘못 재기동할 시간을 넉넉히 준다
+
+        assert len(created) == 1  # 재기동이 일어나지 않았어야 함
+
+    def test_watchdog_respawns_after_unexpected_crash(self, monkeypatch):
+        """서빙 스레드가 예기치 않게 죽어도 watchdog이 자동으로 되살려야 한다.
+
+        실제 사고 재현을 위해 실소켓을 깨는 방식은 select() 루프가 예외 없이
+        그냥 응답을 멈추기만 할 뿐 스레드를 안 죽여서 신뢰성 있게 재현되지
+        않는다(별도로 확인함). 대신 최초 인스턴스의 serve_forever() 자체가
+        예외를 던지도록 만들어 "서빙 스레드가 죽는" 상황을 결정적으로 재현한다.
+        """
+        created: list[HTTPServer] = []
+        real_ctor = health_module.HTTPServer
+
+        def tracking_ctor(*args, **kwargs):
+            srv = real_ctor(*args, **kwargs)
+            created.append(srv)
+            if len(created) == 1:
+                def _boom(poll_interval: float = 0.5) -> None:
+                    raise OSError("simulated crash")
+                srv.serve_forever = _boom  # type: ignore[method-assign]
+            return srv
+
+        monkeypatch.setattr(health_module, "HTTPServer", tracking_ctor)
+
+        port = _free_port()
+        server = start_health_server(host="127.0.0.1", port=port, watchdog_interval=0.05)
+        assert server is created[0]
+        try:
+            time.sleep(0.5)  # watchdog이 죽은 스레드를 감지하고 재기동할 시간
+
+            assert len(created) >= 2, "watchdog이 재기동하지 않음"
+            code, body = _get(port, "/health")
+            assert code == 200
+            assert body["status"] == "ok"
+        finally:
+            # created[0]는 serve_forever를 통째로 갈아끼워서 이미 죽였기 때문에
+            # (내부 __is_shut_down 이벤트가 세팅될 일이 없어) shutdown()을 부르면
+            # 영원히 블록된다 — server_close()는 크래시 시점에 이미 호출됐으므로
+            # 건드릴 필요가 없다. 실제로 살아있는 이후 인스턴스만 정리한다.
+            for srv in created[1:]:
+                try:
+                    srv.shutdown()
+                except Exception:  # noqa: BLE001
+                    pass
