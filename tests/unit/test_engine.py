@@ -633,3 +633,66 @@ class TestReconciliation:
             eng.start(["BTC/USDT"], interval_seconds=60, daily_report_hour=None)
 
         mock_rec.assert_called_once_with(["BTC/USDT"])
+
+
+# ── Daily/weekly report mode plumbing ───────────────────────────────────────────
+# 리포트에 "모드: Live"와 "페이퍼 모드 유지" 권고가 동시에 찍히던 모순을 고친
+# 변경 — 엔진이 실제 mode/리스크 파라미터를 DailyReportGenerator에 넘기는지 확인.
+
+class TestDailyReportModePlumbing:
+    def test_send_daily_report_passes_live_mode_and_risk_params(
+        self, settings, exchange, strategy, risk_manager, portfolio, telegram
+    ):
+        eng = TradingEngine(
+            _make_settings("live"), exchange, strategy, risk_manager, portfolio, telegram
+        )
+        eng.trailing_stop_pct = 2.0
+        eng.sl_floor_pct = 3.0
+        eng.sl_ceiling_pct = 1.5
+        eng.atr_multiplier = 2.0
+        eng.tp_rr_multiplier = 1.5
+
+        mock_gen = MagicMock()
+        mock_gen.generate.return_value = "reports/2026-01-01.md"
+        mock_gen.last_task_results = []
+        with patch("src.report.generator.DailyReportGenerator", return_value=mock_gen) as mock_cls:
+            eng._send_daily_report()
+
+        _, kwargs = mock_cls.call_args
+        assert kwargs["mode"] == "live"
+        assert kwargs["trailing_stop_pct"] == 2.0
+        assert kwargs["sl_floor_pct"] == 3.0
+        assert kwargs["sl_ceiling_pct"] == 1.5
+        assert kwargs["tp_rr_multiplier"] == 1.5
+
+    def test_send_daily_report_passes_paper_mode(
+        self, settings, exchange, strategy, risk_manager, portfolio, telegram
+    ):
+        eng = TradingEngine(
+            _make_settings("paper"), exchange, strategy, risk_manager, portfolio, telegram
+        )
+        mock_gen = MagicMock()
+        mock_gen.generate.return_value = "reports/2026-01-01.md"
+        mock_gen.last_task_results = []
+        with patch("src.report.generator.DailyReportGenerator", return_value=mock_gen) as mock_cls:
+            eng._send_daily_report()
+
+        _, kwargs = mock_cls.call_args
+        assert kwargs["mode"] == "paper"
+
+    def test_send_weekly_report_passes_live_mode(
+        self, settings, exchange, strategy, risk_manager, portfolio, telegram
+    ):
+        eng = TradingEngine(
+            _make_settings("live"), exchange, strategy, risk_manager, portfolio, telegram
+        )
+        eng.trailing_stop_pct = 2.0
+
+        mock_gen = MagicMock()
+        mock_gen.generate_weekly.return_value = ("reports/weekly.md", "summary")
+        with patch("src.report.generator.DailyReportGenerator", return_value=mock_gen) as mock_cls:
+            eng._send_weekly_report()
+
+        _, kwargs = mock_cls.call_args
+        assert kwargs["mode"] == "live"
+        assert kwargs["trailing_stop_pct"] == 2.0

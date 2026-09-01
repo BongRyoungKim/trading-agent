@@ -243,6 +243,55 @@ class TestPendingTasks:
         tasks = gen._pending_tasks(self._empty_stats())
         assert any("페이퍼" in t for t in tasks)
 
+    def test_live_mode_omits_paper_mode_reminder(self, tmp_path):
+        # 실거래 전환 이후엔 "페이퍼 모드 유지" 권고가 뜨면 안 된다 — 이 문구가
+        # "모드: Live" 헤더와 같은 리포트에 동시에 찍히던 모순을 고치는 테스트.
+        gen = DailyReportGenerator(journal_path=str(tmp_path / "j.db"), mode="live")
+        tasks = gen._pending_tasks(self._empty_stats())
+        assert not any("페이퍼" in t for t in tasks)
+
+
+# ── mode-aware rendering ────────────────────────────────────────────────────────
+
+class TestModeAwareRendering:
+    def _base_stats(self) -> dict:
+        return {
+            "total": 0, "wins": 0, "losses": 0, "wr_pct": 0,
+            "total_pnl": 0, "avg_pnl": 0, "profit_factor": None,
+            "sl_count": 0, "tp_count": 0, "signal_count": 0,
+        }
+
+    def _all_stats(self) -> dict:
+        return {"total": 0, "wins": 0, "losses": 0, "wr_pct": 0, "total_pnl": 0}
+
+    def test_default_mode_renders_paper(self, tmp_path):
+        gen = DailyReportGenerator(journal_path=str(tmp_path / "j.db"))
+        md = gen._render(
+            report_date=date(2026, 1, 1), market=[], prev_trades=[], today_trades=[],
+            mr_stats=self._base_stats(), all_stats=self._all_stats(), tasks=[],
+        )
+        assert "모드: Paper" in md
+        assert "모드: Live" not in md
+
+    def test_live_mode_renders_live_and_real_risk_params(self, tmp_path):
+        gen = DailyReportGenerator(
+            journal_path=str(tmp_path / "j.db"),
+            mode="live",
+            trailing_stop_pct=2.0,
+            sl_floor_pct=3.0,
+            sl_ceiling_pct=1.5,
+            atr_multiplier=2.0,
+            tp_rr_multiplier=1.5,
+        )
+        md = gen._render(
+            report_date=date(2026, 1, 1), market=[], prev_trades=[], today_trades=[],
+            mr_stats=self._base_stats(), all_stats=self._all_stats(), tasks=[],
+        )
+        assert "모드: Live" in md
+        assert "Upbit 실거래" in md
+        assert "Trailing Stop | 2.0%" in md
+        assert "[1.5%~3.0%]" in md
+
 
 # ── _render() ─────────────────────────────────────────────────────────────────
 

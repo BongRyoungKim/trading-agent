@@ -1123,7 +1123,15 @@ class TradingEngine:
             )
             symbols = list(self._pinned_symbols) or list(self._tick_symbols)
             gen = DailyReportGenerator(
-                journal_path=db_path, symbols=symbols or None, run_tasks=True
+                journal_path=db_path,
+                symbols=symbols or None,
+                run_tasks=True,
+                mode=self._mode,
+                trailing_stop_pct=float(self._trailing_stop_pct) if self._trailing_stop_pct is not None else 0.0,
+                sl_floor_pct=float(self._sl_floor_pct),
+                sl_ceiling_pct=float(self._sl_ceiling_pct),
+                atr_multiplier=self._atr_multiplier,
+                tp_rr_multiplier=float(self._tp_rr_multiplier),
             )
             report_path = gen.generate()
             logger.info("Daily Markdown report saved", path=str(report_path))
@@ -1213,7 +1221,15 @@ class TradingEngine:
                 if journal_path is not None
                 else "data/journal.db"
             )
-            gen = DailyReportGenerator(journal_path=db_path)
+            gen = DailyReportGenerator(
+                journal_path=db_path,
+                mode=self._mode,
+                trailing_stop_pct=float(self._trailing_stop_pct) if self._trailing_stop_pct is not None else 0.0,
+                sl_floor_pct=float(self._sl_floor_pct),
+                sl_ceiling_pct=float(self._sl_ceiling_pct),
+                atr_multiplier=self._atr_multiplier,
+                tp_rr_multiplier=float(self._tp_rr_multiplier),
+            )
             report_path, summary = gen.generate_weekly()
             logger.info("Weekly Markdown report saved", path=str(report_path))
             if self._telegram.is_enabled:

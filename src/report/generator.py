@@ -39,10 +39,27 @@ class DailyReportGenerator:
         journal_path: str = "data/journal.db",
         symbols: list[str] | None = None,
         run_tasks: bool = False,
+        mode: str = "paper",
+        trailing_stop_pct: float = 1.5,
+        sl_floor_pct: float = 2.5,
+        sl_ceiling_pct: float = 1.5,
+        atr_multiplier: float = 2.0,
+        tp_rr_multiplier: float = 1.5,
     ) -> None:
         self._journal_path = journal_path
         self._symbols = symbols or ["LINK/KRW", "BTC/KRW", "XRP/KRW"]
         self._run_tasks = run_tasks
+        # mode와 리스크 파라미터 표시용 값 — 호출자(엔진)가 실제 라이브 값을
+        # 넘겨주지 않으면 과거처럼 하드코딩된 문구를 그대로 보여주던 것과
+        # 동일한 기본값을 쓴다. 이전엔 이 값들이 전부 리터럴 문자열로 박혀있어
+        # 실거래 전환 이후에도 "모드: Live"와 "페이퍼 모드 유지" 권고가 같은
+        # 리포트에 동시에 찍히는 모순이 있었다 — 실제 상태를 반영하도록 수정.
+        self._mode = mode
+        self._trailing_stop_pct = trailing_stop_pct
+        self._sl_floor_pct = sl_floor_pct
+        self._sl_ceiling_pct = sl_ceiling_pct
+        self._atr_multiplier = atr_multiplier
+        self._tp_rr_multiplier = tp_rr_multiplier
         self.last_task_results: list[ActionResult] = []
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -337,7 +354,8 @@ class DailyReportGenerator:
         if mr_stats["sl_count"] > mr_stats["signal_count"] + mr_stats["tp_count"]:
             tasks.append("SL 청산 비율 높음 — 보유 시간 또는 SL 범위 재검토")
 
-        tasks.append("페이퍼 모드 유지 — 50건 이상 & WR 45%+ 달성 시 실거래 전환 검토")
+        if self._mode == "paper":
+            tasks.append("페이퍼 모드 유지 — 50건 이상 & WR 45%+ 달성 시 실거래 전환 검토")
         return tasks
 
     # ── Markdown renderer ─────────────────────────────────────────────────────
@@ -355,10 +373,11 @@ class DailyReportGenerator:
     ) -> str:
         now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
         prev_date = report_date - timedelta(days=1)
+        mode_label = "Live" if self._mode == "live" else "Paper"
 
         lines: list[str] = [
             f"# 트레이딩 일일 보고서 — {report_date}",
-            f"\n> 생성: {now_kst}  |  전략: RegimeAdaptiveStrategy  |  모드: Live",
+            f"\n> 생성: {now_kst}  |  전략: RegimeAdaptiveStrategy  |  모드: {mode_label}",
             "",
             "---",
             "",
@@ -482,10 +501,10 @@ class DailyReportGenerator:
             "| 전략 | RegimeAdaptiveStrategy (ADX+EMA 국면 자동 전환) |",
             "| 전략 배포 | 2026-06-05 KST |",
             "| 국면 전환 기준 | ADX≥25 + EMA20>EMA50 → SwingMomentum / 나머지 → MeanReversion |",
-            "| SL 설정 | ATR×2.0, [1.5%~2.5%] 클램프 |",
-            "| TP 설정 | SL × 1.5 (1.5:1 RR) |",
-            "| Trailing Stop | 1.5% |",
-            "| 모드 | Live (Upbit 실거래) |",
+            f"| SL 설정 | ATR×{self._atr_multiplier}, [{self._sl_ceiling_pct}%~{self._sl_floor_pct}%] 클램프 |",
+            f"| TP 설정 | SL × {self._tp_rr_multiplier} ({self._tp_rr_multiplier}:1 RR) |",
+            f"| Trailing Stop | {self._trailing_stop_pct}% |",
+            f"| 모드 | {mode_label} ({'Upbit 실거래' if self._mode == 'live' else '모의투자'}) |",
             "",
         ]
 
@@ -546,10 +565,11 @@ class DailyReportGenerator:
         wr = wins / total * 100 if total else 0
         s = mr_stats
         pf_str = f"{s['profit_factor']:.2f}" if s["profit_factor"] is not None else "∞"
+        mode_label = "Live" if self._mode == "live" else "Paper"
 
         lines: list[str] = [
             f"# 트레이딩 주간 보고서 — {week_start} ~ {week_end}",
-            f"\n> 생성: {now_kst}  |  전략: RegimeAdaptiveStrategy  |  모드: Live",
+            f"\n> 생성: {now_kst}  |  전략: RegimeAdaptiveStrategy  |  모드: {mode_label}",
             "",
             "---",
             "",
