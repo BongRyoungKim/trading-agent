@@ -17,12 +17,11 @@ import argparse
 import sys
 from decimal import Decimal
 
-from loguru import logger
-
 from src.breakout.detector import BreakoutConfig
 from src.breakout.exits import ExitConfig
 from src.breakout.scanner import BreakoutScanner, ScannerConfig
 from src.config.settings import get_settings
+from src.utils.logger import logger, setup_logger
 from src.exchange.upbit import UpbitClient
 from src.portfolio.tracker import PortfolioTracker
 from src.utils.telegram import TelegramClient
@@ -63,6 +62,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
+    # 프로젝트 공용 로거 설정을 반드시 호출해야 한다 — loguru의 기본 핸들러는
+    # logger.info("...", symbol=..., pnl=...)처럼 넘긴 구조화 필드(extra)를
+    # 렌더링하지 않아서, 이걸 빼먹으면 로그에 심볼/가격/손익 등 핵심 정보가
+    # 전부 조용히 사라진다 (실제로 배포 후 이 문제가 발견됨).
+    setup_logger()
     settings = get_settings()
 
     exchange = UpbitClient(
