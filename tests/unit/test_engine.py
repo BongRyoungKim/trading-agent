@@ -91,11 +91,15 @@ def risk_manager(settings):
 
 def _make_position_mock(entry: float = 50000.0, amount: float = 1.0,
                          stop_loss=None, take_profit=None,
-                         entry_time: datetime | None = None):
+                         entry_time: datetime | None = None,
+                         highest_price=None):
     """
     amount defaults to 1.0 so that amount*price >> 5001 KRW dust threshold.
     entry_time defaults to 1 minute ago so 45-min time-stop does not trigger
     unless explicitly set to an older time.
+    highest_price defaults to entry (mirrors PortfolioTracker.open_position,
+    which seeds it with entry_price) — leaving it as an unconfigured MagicMock
+    attribute would break the `price > pos.highest_price` ratchet check.
     """
     pos = MagicMock()
     pos.entry_price = Decimal(str(entry))
@@ -104,6 +108,7 @@ def _make_position_mock(entry: float = 50000.0, amount: float = 1.0,
     pos.take_profit = take_profit
     pos.side = "buy"
     pos.trailing_stop_pct = None
+    pos.highest_price = highest_price if highest_price is not None else Decimal(str(entry))
     pos.entry_time = entry_time if entry_time is not None else (
         datetime.now(UTC) - timedelta(minutes=1)
     )
@@ -439,6 +444,10 @@ class TestStopLossAndTakeProfit:
         pos = _make_position_mock(entry=50000.0, take_profit=Decimal("60000"))
         portfolio.has_position.return_value = True
         portfolio.get_position.return_value = pos
+        # Ticker price (62000) exceeds entry, so the highest-price ratchet fires and
+        # reassigns `pos` to this call's return value — keep it the same mock object
+        # so downstream take_profit/stop_loss reads still see the configured values.
+        portfolio.update_highest_price.return_value = pos
         exchange.get_ticker.return_value = _make_ticker(62000.0)  # above take-profit
 
         with patch.object(engine, "_close_position") as mock_close:
@@ -459,6 +468,47 @@ class TestStopLossAndTakeProfit:
             engine._process_symbol("BTC/USDT")
 
         mock_close.assert_not_called()
+
+
+class TestHighestPriceRatchet:
+    """신고가(highest_price) 갱신 — 트레일링 스탑 계산과는 별개로, 대시보드
+    표시를 위해 매 틱마다 신고가를 갱신하는지 검증."""
+
+    def test_new_high_updates_highest_price(self, engine, exchange, portfolio):
+        pos = _make_position_mock(entry=50000.0, stop_loss=Decimal("45000"))
+        portfolio.has_position.return_value = True
+        portfolio.get_position.return_value = pos
+        portfolio.update_highest_price.return_value = pos
+        exchange.get_ticker.return_value = _make_ticker(53000.0)  # new high, no SL/TP hit
+        engine._strategy_provider.generate_signal.return_value = _make_signal(SignalAction.HOLD)
+
+        engine._process_symbol("BTC/USDT")
+
+        portfolio.update_highest_price.assert_called_once_with("BTC/USDT", Decimal("53000"))
+
+    def test_no_new_high_does_not_update(self, engine, exchange, portfolio):
+        pos = _make_position_mock(entry=50000.0, highest_price=Decimal("52000"),
+                                   stop_loss=Decimal("45000"))
+        portfolio.has_position.return_value = True
+        portfolio.get_position.return_value = pos
+        exchange.get_ticker.return_value = _make_ticker(51000.0)  # below prior high
+        engine._strategy_provider.generate_signal.return_value = _make_signal(SignalAction.HOLD)
+
+        engine._process_symbol("BTC/USDT")
+
+        portfolio.update_highest_price.assert_not_called()
+
+    def test_sell_side_never_updates_highest_price(self, engine, exchange, portfolio):
+        pos = _make_position_mock(entry=50000.0, stop_loss=None, take_profit=None)
+        pos.side = "sell"
+        portfolio.has_position.return_value = True
+        portfolio.get_position.return_value = pos
+        exchange.get_ticker.return_value = _make_ticker(53000.0)
+        engine._strategy_provider.generate_signal.return_value = _make_signal(SignalAction.HOLD)
+
+        engine._process_symbol("BTC/USDT")
+
+        portfolio.update_highest_price.assert_not_called()
 
 
 # ── Strategy resolution ───────────────────────────────────────────────────────

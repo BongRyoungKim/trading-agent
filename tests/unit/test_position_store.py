@@ -24,6 +24,7 @@ def _pos(
     entry: float = 50000.0,
     stop_loss: float | None = None,
     take_profit: float | None = None,
+    highest_price: float | None = None,
 ) -> Position:
     return Position(
         symbol=symbol,
@@ -33,6 +34,7 @@ def _pos(
         entry_time=_NOW,
         stop_loss=Decimal(str(stop_loss)) if stop_loss is not None else None,
         take_profit=Decimal(str(take_profit)) if take_profit is not None else None,
+        highest_price=Decimal(str(highest_price)) if highest_price is not None else None,
     )
 
 
@@ -96,6 +98,20 @@ class TestStoreSave:
         pos = store.load_all()["BTC/USDT"]
         assert pos.amount == Decimal("0.00123456")
         assert pos.entry_price == Decimal("49999.99")
+
+    def test_save_with_highest_price(self, store):
+        store.save(_pos(entry=50000.0, highest_price=53000.0))
+        pos = store.load_all()["BTC/USDT"]
+        assert pos.highest_price == Decimal("53000.0")
+
+    def test_save_without_highest_price_falls_back_to_entry_on_load(self, store):
+        """
+        신고가 컬럼 도입 이전(마이그레이션 이전)에 저장된 행을 복구하는 것과
+        동일한 경로 — highest_price가 NULL이면 최소값인 진입가로 대체된다.
+        """
+        store.save(_pos(entry=50000.0, highest_price=None))
+        pos = store.load_all()["BTC/USDT"]
+        assert pos.highest_price == Decimal("50000.0")
 
 
 # ── Delete ────────────────────────────────────────────────────────────────────

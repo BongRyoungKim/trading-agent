@@ -113,6 +113,7 @@ class DashboardState:
                 "entry_time": pos.entry_time.isoformat(),
                 "stop_loss": float(pos.stop_loss) if pos.stop_loss is not None else None,
                 "take_profit": float(pos.take_profit) if pos.take_profit is not None else None,
+                "highest_price": float(pos.highest_price) if pos.highest_price is not None else None,
             })
         return positions
 

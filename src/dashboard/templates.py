@@ -660,6 +660,7 @@ function renderPositions(positions) {{
   const rows = positions.map(p => {{
     const sl = p.stop_loss != null ? fmtKRW(p.stop_loss) : '—';
     const tp = p.take_profit != null ? fmtKRW(p.take_profit) : '—';
+    const hi = p.highest_price != null ? fmtKRW(p.highest_price) : '—';
     const dt = p.entry_time ? p.entry_time.substring(0,16).replace('T',' ') : '-';
     const cur = p.current_price != null ? fmtKRW(p.current_price) : '—';
     const pnl = p.unrealized_pnl ?? 0;
@@ -672,6 +673,7 @@ function renderPositions(positions) {{
       <td style="color:#94a3b8">${{p.amount != null ? p.amount.toFixed(4) : '-'}}</td>
       <td style="font-weight:600">${{fmtKRW(p.entry_price)}}</td>
       <td style="font-weight:600">${{cur}}</td>
+      <td style="color:#38bdf8">${{hi}}</td>
       <td>${{pnlStr}}</td>
       <td style="color:#ef4444">${{sl}}</td>
       <td style="color:#10b981">${{tp}}</td>
@@ -679,7 +681,7 @@ function renderPositions(positions) {{
     </tr>`;
   }});
   el.innerHTML = `<table><thead><tr>
-    <th>종목</th><th>방향</th><th>수량</th><th>진입가</th><th>현재가</th><th>평가손익</th><th>손절가</th><th>목표가</th><th>진입 시각</th>
+    <th>종목</th><th>방향</th><th>수량</th><th>진입가</th><th>현재가</th><th>신고가</th><th>평가손익</th><th>손절가</th><th>목표가</th><th>진입 시각</th>
   </tr></thead><tbody>${{rows.join('')}}</tbody></table>`;
 }}
 async function refreshPositionsTrades() {{
@@ -1098,6 +1100,7 @@ def _render_positions(positions: list[dict]) -> str:
     for pos in positions:
         sl = f"{pos['stop_loss']:,.2f}" if pos.get("stop_loss") else "—"
         tp = f"{pos['take_profit']:,.2f}" if pos.get("take_profit") else "—"
+        hi = f"{pos['highest_price']:,.2f}" if pos.get("highest_price") else "—"
         entry_time = pos.get("entry_time", "")
         dt = entry_time[:16].replace("T", " ") if entry_time else "-"
         cur = pos.get("current_price")
@@ -1113,6 +1116,7 @@ def _render_positions(positions: list[dict]) -> str:
             f"<td>{pos['amount']:.4f}</td>"
             f"<td>{pos['entry_price']:,.2f}</td>"
             f"<td style='font-weight:600'>{cur_str}</td>"
+            f"<td style='color:#38bdf8'>{hi}</td>"
             f"<td>{pnl_str}</td>"
             f"<td style='color:#ef4444'>{sl}</td><td style='color:#10b981'>{tp}</td>"
             f"<td style='color:#64748b;font-size:.78rem'>{dt}</td>"
@@ -1121,7 +1125,7 @@ def _render_positions(positions: list[dict]) -> str:
     return (
         "<table><thead><tr>"
         "<th>종목</th><th>방향</th><th>수량</th>"
-        "<th>진입가</th><th>현재가</th><th>평가손익</th>"
+        "<th>진입가</th><th>현재가</th><th>신고가</th><th>평가손익</th>"
         "<th>손절가</th><th>목표가</th><th>진입 시각</th>"
         "</tr></thead><tbody>"
         + "".join(rows)

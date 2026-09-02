@@ -121,6 +121,34 @@ class TestPortfolioTracker:
         tracker.close_position("BTC/USDT", Decimal("52000"))   # -300
         assert tracker.realized_pnl == Decimal("200")
 
+    def test_open_position_seeds_highest_price_with_entry(self) -> None:
+        """신고가(highest_price)는 진입 시점엔 진입가와 같아야 한다."""
+        tracker = _make_tracker(10000.0)
+        pos = tracker.open_position("BTC/USDT", "buy", Decimal("0.1"), Decimal("50000"))
+        assert pos.highest_price == Decimal("50000")
+
+    def test_update_highest_price_ratchets(self) -> None:
+        tracker = _make_tracker(10000.0)
+        tracker.open_position("BTC/USDT", "buy", Decimal("0.1"), Decimal("50000"))
+        updated = tracker.update_highest_price("BTC/USDT", Decimal("53000"))
+        assert updated.highest_price == Decimal("53000")
+        assert tracker.get_position("BTC/USDT").highest_price == Decimal("53000")
+
+    def test_update_highest_price_leaves_other_fields_untouched(self) -> None:
+        tracker = _make_tracker(10000.0)
+        tracker.open_position(
+            "BTC/USDT", "buy", Decimal("0.1"), Decimal("50000"),
+            stop_loss=Decimal("48000"),
+        )
+        updated = tracker.update_highest_price("BTC/USDT", Decimal("53000"))
+        assert updated.stop_loss == Decimal("48000")
+        assert updated.entry_price == Decimal("50000")
+
+    def test_update_highest_price_non_existent_raises(self) -> None:
+        tracker = _make_tracker(10000.0)
+        with pytest.raises(TradingAgentError, match="No open position"):
+            tracker.update_highest_price("BTC/USDT", Decimal("50000"))
+
 
 class TestPortfolioSnapshot:
     def test_snapshot_is_immutable(self) -> None:

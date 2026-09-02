@@ -107,6 +107,7 @@ class PortfolioTracker:
             stop_loss=stop_loss,
             take_profit=take_profit,
             trailing_stop_pct=trailing_stop_pct,
+            highest_price=entry_price,  # 진입 시점엔 진입가가 곧 신고가
         )
         self._positions[symbol] = position
         if self._store is not None:
@@ -196,6 +197,41 @@ class PortfolioTracker:
             "Trailing stop updated",
             symbol=symbol,
             new_stop=float(new_stop),
+        )
+        return updated
+
+    def update_highest_price(self, symbol: str, new_highest: Decimal) -> Position:
+        """
+        Ratchet up the tracked peak price since entry (신고가) — used for
+        dashboard display and independent of the trailing-stop calculation
+        itself. Caller must ensure new_highest is more favourable (higher for
+        a "buy" position) than the current value; this method does not
+        itself enforce the ratchet direction.
+
+        Returns the updated Position.
+
+        Raises:
+            TradingAgentError: If no open position for `symbol`.
+        """
+        if symbol not in self._positions:
+            raise TradingAgentError(
+                f"No open position for {symbol}",
+                details={"symbol": symbol},
+            )
+        old_position = self._positions[symbol]
+        updated = replace(old_position, highest_price=new_highest)
+        self._positions[symbol] = updated
+        if self._store is not None:
+            try:
+                self._store.save(updated)
+            except Exception as exc:
+                self._positions[symbol] = old_position
+                logger.error(f"Highest-price update failed to persist — rolled back in memory: {exc}", symbol=symbol)
+                raise
+        logger.debug(
+            "Highest price updated",
+            symbol=symbol,
+            new_highest=float(new_highest),
         )
         return updated
 

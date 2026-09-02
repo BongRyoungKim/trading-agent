@@ -21,6 +21,7 @@ class Position:
     stop_loss: Decimal | None = None
     take_profit: Decimal | None = None
     trailing_stop_pct: Decimal | None = None   # if set, stop_loss ratchets up
+    highest_price: Decimal | None = None       # peak price since entry (ratchet-only, side="buy")
 
     def unrealized_pnl(self, current_price: Decimal) -> Decimal:
         if self.side == "buy":

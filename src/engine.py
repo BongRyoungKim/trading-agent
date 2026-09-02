@@ -255,6 +255,10 @@ class TradingEngine:
             )
             return True
 
+        # ── highest price ratchet (신고가, 대시보드 표시용 — 트레일링 계산과는 별개) ──
+        if pos.side == "buy" and (pos.highest_price is None or price > pos.highest_price):
+            pos = self._portfolio.update_highest_price(symbol, price)
+
         # ── trailing stop ratchet ──────────────────────────────────────────
         trailing_pct = pos.trailing_stop_pct if pos.trailing_stop_pct is not None \
             else self._trailing_stop_pct

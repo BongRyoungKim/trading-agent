@@ -59,6 +59,51 @@ class TestDashboardState:
         state = self._state()
         assert state.get_positions() == []
 
+    def test_get_positions_includes_highest_price(self) -> None:
+        from datetime import UTC, datetime
+        from decimal import Decimal
+
+        state = self._state()
+        eng = self._mock_engine()
+        pos = MagicMock()
+        pos.side = "buy"
+        pos.amount = Decimal("0.1")
+        pos.entry_price = Decimal("50000")
+        pos.entry_time = datetime(2024, 1, 1, tzinfo=UTC)
+        pos.stop_loss = Decimal("48000")
+        pos.take_profit = Decimal("55000")
+        pos.highest_price = Decimal("53000")
+        eng._portfolio.open_symbols.return_value = ["BTC/USDT"]  # noqa: SLF001
+        eng._portfolio.get_position.return_value = pos  # noqa: SLF001
+        eng._latest_ticks = {}  # noqa: SLF001
+        state.register_engine(eng)
+
+        positions = state.get_positions()
+        assert len(positions) == 1
+        assert positions[0]["highest_price"] == 53000.0
+
+    def test_get_positions_highest_price_none_when_unset(self) -> None:
+        from datetime import UTC, datetime
+        from decimal import Decimal
+
+        state = self._state()
+        eng = self._mock_engine()
+        pos = MagicMock()
+        pos.side = "buy"
+        pos.amount = Decimal("0.1")
+        pos.entry_price = Decimal("50000")
+        pos.entry_time = datetime(2024, 1, 1, tzinfo=UTC)
+        pos.stop_loss = None
+        pos.take_profit = None
+        pos.highest_price = None
+        eng._portfolio.open_symbols.return_value = ["BTC/USDT"]  # noqa: SLF001
+        eng._portfolio.get_position.return_value = pos  # noqa: SLF001
+        eng._latest_ticks = {}  # noqa: SLF001
+        state.register_engine(eng)
+
+        positions = state.get_positions()
+        assert positions[0]["highest_price"] is None
+
     def test_get_pnl_empty_without_engine(self) -> None:
         state = self._state()
         assert state.get_pnl() == {}

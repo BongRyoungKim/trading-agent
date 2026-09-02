@@ -68,16 +68,19 @@ class SQLitePositionStore:
                     entry_time          REAL    NOT NULL,
                     stop_loss           TEXT,
                     take_profit         TEXT,
-                    trailing_stop_pct   TEXT
+                    trailing_stop_pct   TEXT,
+                    highest_price       TEXT
                 )
             """)
-            # Migration for existing DBs that lack the new column
-            try:
-                conn.execute(
-                    "ALTER TABLE positions ADD COLUMN trailing_stop_pct TEXT"
-                )
-            except Exception:  # noqa: BLE001 — column already exists
-                pass
+            # Migration for existing DBs that lack the new columns
+            for ddl in (
+                "ALTER TABLE positions ADD COLUMN trailing_stop_pct TEXT",
+                "ALTER TABLE positions ADD COLUMN highest_price TEXT",
+            ):
+                try:
+                    conn.execute(ddl)
+                except Exception:  # noqa: BLE001 — column already exists
+                    pass
         logger.debug("SQLitePositionStore initialized", db=str(self._db_path))
 
     # ── Write ─────────────────────────────────────────────────────────────────
@@ -89,8 +92,8 @@ class SQLitePositionStore:
                 """
                 INSERT OR REPLACE INTO positions
                     (symbol, side, amount, entry_price, entry_time,
-                     stop_loss, take_profit, trailing_stop_pct)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     stop_loss, take_profit, trailing_stop_pct, highest_price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     position.symbol,
@@ -103,6 +106,7 @@ class SQLitePositionStore:
                     str(position.trailing_stop_pct)
                     if position.trailing_stop_pct is not None
                     else None,
+                    str(position.highest_price) if position.highest_price is not None else None,
                 ),
             )
 
@@ -138,13 +142,23 @@ class SQLitePositionStore:
             if "trailing_stop_pct" in keys and row["trailing_stop_pct"] is not None
             else None
         )
+        entry_price = Decimal(row["entry_price"])
+        # 이 컬럼이 생기기 전(마이그레이션 이전)에 저장된 포지션이 복구되는 경우,
+        # 신고가를 알 수 없으므로 최소값인 진입가로 대체한다 — None으로 두면
+        # 대시보드에 빈 값이 뜨고, 다음 틱에서 실제 신고가로 자연스럽게 갱신된다.
+        highest_price = (
+            Decimal(row["highest_price"])
+            if "highest_price" in keys and row["highest_price"] is not None
+            else entry_price
+        )
         return Position(
             symbol=row["symbol"],
             side=row["side"],  # type: ignore[arg-type]
             amount=Decimal(row["amount"]),
-            entry_price=Decimal(row["entry_price"]),
+            entry_price=entry_price,
             entry_time=datetime.fromtimestamp(row["entry_time"], tz=UTC),
             stop_loss=Decimal(row["stop_loss"]) if row["stop_loss"] is not None else None,
             take_profit=Decimal(row["take_profit"]) if row["take_profit"] is not None else None,
             trailing_stop_pct=trailing,
+            highest_price=highest_price,
         )
