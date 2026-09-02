@@ -48,6 +48,24 @@ class NewsTuningOutcome:
     applied: bool  # False면 dry_run이었거나 중립 구간이라 반영 안 됨
 
 
+def _format_samples(news: NewsScore) -> str:
+    """강세/약세로 매칭된 샘플 헤드라인 원문을 사람이 읽을 수 있는 블록으로 만든다.
+
+    이전엔 집계 숫자(헤드라인 건수, 강세/약세 히트 수)만 로그·텔레그램에 남아서
+    실제로 어떤 뉴스가 그 점수를 만들었는지 나중에 확인할 방법이 없었다 —
+    NewsScore가 이미 갖고 있는 sample_bullish/sample_bearish(각 최대 5개)를
+    빠뜨리지 않고 붙여서, 조정이 실적용된 날 원인 추적이 가능하게 한다.
+    """
+    lines: list[str] = []
+    if news.sample_bullish:
+        lines.append("강세 헤드라인:")
+        lines.extend(f"  · {h}" for h in news.sample_bullish)
+    if news.sample_bearish:
+        lines.append("약세 헤드라인:")
+        lines.extend(f"  · {h}" for h in news.sample_bearish)
+    return "\n".join(lines)
+
+
 def _target_for(param: str, direction: float, old: float, score: float) -> float:
     fraction = MAX_ADJUST_FRACTION * score * direction
     return old * (1.0 + fraction)
@@ -87,7 +105,15 @@ def run_daily_news_tuning(
             f"중립 구간(score={news.score:+.2f}, 헤드라인 {news.headline_count}건 "
             f"강세{news.bullish_hits}/약세{news.bearish_hits}) — 조정 없음"
         )
-        logger.info("News sentiment: neutral, no adjustment", score=news.score)
+        samples = _format_samples(news)
+        if samples:
+            detail += "\n" + samples
+        logger.info(
+            "News sentiment: neutral, no adjustment",
+            score=news.score,
+            sample_bullish=news.sample_bullish,
+            sample_bearish=news.sample_bearish,
+        )
         return ActionResult("news_sentiment", "뉴스 감성 조정", "skipped", detail)
 
     direction_kr = "완화(강세)" if news.score > 0 else "강화(약세)"
@@ -99,7 +125,16 @@ def run_daily_news_tuning(
     if dry_run:
         lines = [f"[dry-run] {p['param']}: {p['old']} → {p['target']:.4f}" for p in planned]
         detail = f"{direction_kr} 방향 조정 시뮬레이션 (dry-run, 미반영)\n{reason}\n" + "\n".join(lines)
-        logger.info("News sentiment: dry-run", score=news.score, planned=planned)
+        samples = _format_samples(news)
+        if samples:
+            detail += "\n" + samples
+        logger.info(
+            "News sentiment: dry-run",
+            score=news.score,
+            planned=planned,
+            sample_bullish=news.sample_bullish,
+            sample_bearish=news.sample_bearish,
+        )
         return ActionResult("news_sentiment", "뉴스 감성 조정 (dry-run)", "skipped", detail)
 
     applied_changes = []
@@ -115,15 +150,30 @@ def run_daily_news_tuning(
     lp.enforce_rsi_gap()
 
     changed = [c for c in applied_changes if c["changed"]]
+    samples = _format_samples(news)
     if changed:
         lp.request_restart(f"뉴스 감성 자동 조정: {reason}")
         lines = [f"{c['param']}: {c['old']} → {c['new']}" for c in changed]
         detail = f"{direction_kr} 방향 조정 적용\n{reason}\n" + "\n".join(lines)
-        logger.warning("News sentiment: adjustment applied", changes=changed)
+        if samples:
+            detail += "\n" + samples
+        logger.warning(
+            "News sentiment: adjustment applied",
+            changes=changed,
+            sample_bullish=news.sample_bullish,
+            sample_bearish=news.sample_bearish,
+        )
         return ActionResult("news_sentiment", "뉴스 감성 조정", "executed", detail)
 
     detail = f"이미 안전범위 경계값이라 변경 없음\n{reason}"
-    logger.info("News sentiment: at bounds, no change", planned=planned)
+    if samples:
+        detail += "\n" + samples
+    logger.info(
+        "News sentiment: at bounds, no change",
+        planned=planned,
+        sample_bullish=news.sample_bullish,
+        sample_bearish=news.sample_bearish,
+    )
     return ActionResult("news_sentiment", "뉴스 감성 조정", "skipped", detail)
 
 

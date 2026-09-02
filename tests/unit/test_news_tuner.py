@@ -16,8 +16,22 @@ def isolate_files(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _score(value: float, count: int = 10, bull: int = 0, bear: int = 0) -> NewsScore:
-    return NewsScore(headline_count=count, bullish_hits=bull, bearish_hits=bear, score=value)
+def _score(
+    value: float,
+    count: int = 10,
+    bull: int = 0,
+    bear: int = 0,
+    sample_bull: list[str] | None = None,
+    sample_bear: list[str] | None = None,
+) -> NewsScore:
+    return NewsScore(
+        headline_count=count,
+        bullish_hits=bull,
+        bearish_hits=bear,
+        score=value,
+        sample_bullish=sample_bull or [],
+        sample_bearish=sample_bear or [],
+    )
 
 
 class TestComputeAdjustments:
@@ -101,3 +115,55 @@ class TestRunDailyNewsTuning:
         monkeypatch.setattr(nt, "fetch_and_score", boom)
         result = nt.run_daily_news_tuning(dry_run=True)
         assert result.status == "error"
+
+    def test_neutral_result_includes_sample_headlines_when_present(self, monkeypatch):
+        monkeypatch.setattr(
+            nt, "fetch_and_score",
+            lambda hours: _score(
+                0.05,
+                sample_bull=["비트코인 상승세 지속"],
+                sample_bear=["규제 우려로 하락 압력"],
+            ),
+        )
+        result = nt.run_daily_news_tuning(dry_run=True)
+        assert result.status == "skipped"
+        assert "강세 헤드라인:" in result.detail
+        assert "비트코인 상승세 지속" in result.detail
+        assert "약세 헤드라인:" in result.detail
+        assert "규제 우려로 하락 압력" in result.detail
+
+    def test_neutral_result_omits_sample_headers_when_no_samples(self, monkeypatch):
+        monkeypatch.setattr(nt, "fetch_and_score", lambda hours: _score(0.05))
+        result = nt.run_daily_news_tuning(dry_run=True)
+        assert result.status == "skipped"
+        assert "강세 헤드라인:" not in result.detail
+        assert "약세 헤드라인:" not in result.detail
+
+    def test_dry_run_result_includes_sample_headlines_when_present(self, monkeypatch):
+        monkeypatch.setattr(
+            nt, "fetch_and_score",
+            lambda hours: _score(0.6, bull=6, sample_bull=["ETF 승인 기대감 확산"]),
+        )
+        result = nt.run_daily_news_tuning(dry_run=True)
+        assert result.status == "skipped"
+        assert "dry-run" in result.title
+        assert "강세 헤드라인:" in result.detail
+        assert "ETF 승인 기대감 확산" in result.detail
+
+    def test_applied_result_includes_sample_headlines_when_present(self, monkeypatch):
+        monkeypatch.setattr(
+            nt, "fetch_and_score",
+            lambda hours: _score(0.6, bull=6, sample_bull=["기관 매수 유입 확대"]),
+        )
+
+        def fake_apply(param, target_value, trigger, reason):
+            return {"param": param, "old": 1.0, "new": 0.9, "changed": True}
+
+        monkeypatch.setattr(lp, "propose_and_apply", fake_apply)
+        monkeypatch.setattr(lp, "enforce_rsi_gap", lambda: None)
+        monkeypatch.setattr(lp, "request_restart", lambda reason: None)
+
+        result = nt.run_daily_news_tuning(dry_run=False)
+        assert result.status == "executed"
+        assert "강세 헤드라인:" in result.detail
+        assert "기관 매수 유입 확대" in result.detail
