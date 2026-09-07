@@ -33,13 +33,14 @@ def _make_ticker(price: float = 50000.0) -> MagicMock:
     return t
 
 
-def _make_signal(action: SignalAction = SignalAction.HOLD) -> Signal:
+def _make_signal(action: SignalAction = SignalAction.HOLD, metadata: dict | None = None) -> Signal:
     return Signal(
         symbol="BTC/USDT",
         action=action,
         strength=0.8,
         reason="test",
         timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+        metadata=metadata,
     )
 
 
@@ -206,6 +207,24 @@ class TestProcessSymbol:
         with patch.object(engine, "_open_position") as mock_open:
             engine._process_symbol("BTC/USDT")
         mock_open.assert_not_called()
+
+    def test_buy_signal_below_min_entry_price_is_skipped(self, engine, strategy, portfolio):
+        strategy.generate_signal.return_value = _make_signal(
+            SignalAction.BUY, metadata={"price": 99.0}
+        )
+        portfolio.has_position.return_value = False
+        with patch.object(engine, "_open_position") as mock_open:
+            engine._process_symbol("BTC/USDT")
+        mock_open.assert_not_called()
+
+    def test_buy_signal_at_or_above_min_entry_price_opens(self, engine, strategy, portfolio):
+        strategy.generate_signal.return_value = _make_signal(
+            SignalAction.BUY, metadata={"price": 100.0}
+        )
+        portfolio.has_position.return_value = False
+        with patch.object(engine, "_open_position") as mock_open:
+            engine._process_symbol("BTC/USDT")
+        mock_open.assert_called_once()
 
     def test_sell_signal_with_position_closes(self, engine, strategy, portfolio):
         strategy.generate_signal.return_value = _make_signal(SignalAction.SELL)

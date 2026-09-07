@@ -586,6 +586,13 @@ class TradingEngine:
 
     _DUST_THRESHOLD_KRW = Decimal("5001")
 
+    # 저가 동전코인(원화 단가 100원 미만) 진입 제외.
+    # 분석 결과 100원 미만 종목 거래는 승률 22.2%/profit_factor 0.73으로
+    # 100원 이상 종목(승률 57.1%/profit_factor 1.10) 대비 크게 저조했다.
+    # 거래량 급증만으로 진입 조건을 충족하는 초저가 코인의 변동성·슬리피지
+    # 리스크를 걸러내기 위한 최소 단가 필터.
+    _MIN_ENTRY_PRICE_KRW = Decimal("100")
+
     def _process_symbol(self, symbol: str) -> None:
         # ── Step 1: stop-loss / take-profit check ─────────────────────────────
         if self._check_exit_conditions(symbol):
@@ -631,6 +638,15 @@ class TradingEngine:
         if signal_.action == SignalAction.BUY and not has_pos:
             if symbol in self._symbol_blacklist:
                 logger.debug("Symbol blacklisted — buy skipped", symbol=symbol)
+                return
+            entry_price_check = signal_.metadata.get("price") if signal_.metadata else None
+            if entry_price_check is not None and Decimal(str(entry_price_check)) < self._MIN_ENTRY_PRICE_KRW:
+                logger.info(
+                    "저가 동전코인 — 최소 단가 필터로 진입 제외",
+                    symbol=symbol,
+                    price=float(entry_price_check),
+                    min_price=float(self._MIN_ENTRY_PRICE_KRW),
+                )
                 return
             if self._portfolio.cash < Decimal("10000"):
                 logger.info(
