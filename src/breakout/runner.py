@@ -44,6 +44,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--position-size-krw", type=float, default=100_000.0,
                          help="포지션당 페이퍼 매수 금액(KRW)")
     parser.add_argument("--max-concurrent-positions", type=int, default=3)
+    parser.add_argument(
+        "--candidate-scan-delay-seconds", type=float, default=0.15,
+        help="후보 종목 OHLCV 조회 사이 간격(초). 업비트 API 레이트리밋(429) 완화용. 기본 0.15초",
+    )
     parser.add_argument("--base-window-bars", type=int, default=48)
     parser.add_argument("--base-range-max-pct", type=float, default=8.0)
     parser.add_argument("--breakout-margin-pct", type=float, default=1.5)
@@ -96,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     scanner_cfg = ScannerConfig(
         max_concurrent_positions=args.max_concurrent_positions,
         position_size_krw=Decimal(str(args.position_size_krw)),
+        candidate_scan_delay_seconds=args.candidate_scan_delay_seconds,
     )
 
     logger.info(

@@ -39,6 +39,12 @@ class ScannerConfig:
     position_size_krw: Decimal = Decimal("100000")   # 페이퍼 계좌 — 실제 자금 아님
     timeframe: str = "5m"
     ohlcv_limit_buffer: int = 5   # base_window_bars 위에 얹는 여유분
+    candidate_scan_delay_seconds: float = 0.15
+    # 후보 종목이 한 스캔 사이클에 20~30개씩 몰려서 조회되는데, 사이 간격 없이
+    # 연속 호출하면 업비트 API 레이트리밋(429)에 걸리기 쉽다. 실제로 STORJ/KRW가
+    # 유효한 브레이크아웃 신호를 낸 그 순간(2026-09-07 09:55 봉) 딱 그 스캔
+    # 사이클에서 다른 후보가 429로 재시도까지 실패해 평가 대상에서 빠졌던 사고가
+    # 있었음 — 이런 놓침을 줄이기 위해 후보 간 호출에 짧은 간격을 둔다.
 
 
 class BreakoutScanner:
@@ -145,6 +151,10 @@ class BreakoutScanner:
                 continue
 
             df = self._fetch_ohlcv_df(symbol)
+            # 다음 후보 호출 전에 짧게 쉬어 API 요청을 분산시킨다 — 429로 인해
+            # 이번 순간의 유효한 신호를 통째로 놓치는 사고를 줄이기 위함.
+            if self._scanner_cfg.candidate_scan_delay_seconds > 0:
+                time.sleep(self._scanner_cfg.candidate_scan_delay_seconds)
             if df is None:
                 continue
             checked += 1
@@ -168,11 +178,29 @@ class BreakoutScanner:
 
     def _fetch_ohlcv_df(self, symbol: str) -> pd.DataFrame | None:
         limit = self._detector_cfg.base_window_bars + self._scanner_cfg.ohlcv_limit_buffer
-        try:
-            bars = self._exchange.get_ohlcv(symbol, self._scanner_cfg.timeframe, limit=limit)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Breakout: OHLCV fetch failed", symbol=symbol, error=str(exc))
-            return None
+        # exchange.get_ohlcv 자체에도 재시도(최대 3회)가 있지만, 레이트리밋이
+        # 몰리는 스캔 사이클에는 그마저 다 소진될 수 있다. 놓치면 그 신호는
+        # 영영 재현되지 않으므로(다음 사이클엔 이미 다른 봉이 "최신"이 됨),
+        # 한 번 더 여유를 두고 재시도한다.
+        bars = None
+        for attempt in range(2):
+            try:
+                bars = self._exchange.get_ohlcv(symbol, self._scanner_cfg.timeframe, limit=limit)
+                break
+            except Exception as exc:  # noqa: BLE001
+                if attempt == 0:
+                    logger.debug(
+                        "Breakout: OHLCV fetch failed, retrying once more",
+                        symbol=symbol, error=str(exc),
+                    )
+                    time.sleep(2.0)
+                else:
+                    logger.warning(
+                        "Breakout: OHLCV fetch failed after extra retry — "
+                        "candidate skipped this cycle (레이트리밋 등으로 이번 사이클 놓침)",
+                        symbol=symbol, error=str(exc),
+                    )
+                    return None
         if not bars:
             return None
         return pd.DataFrame(

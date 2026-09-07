@@ -99,6 +99,48 @@ class TestScanForEntries:
 
         assert scanner.open_symbols == []
 
+    def test_ohlcv_fetch_retried_once_then_succeeds(self, monkeypatch) -> None:
+        """첫 시도가 실패해도(예: 429) 한 번 더 재시도해서 후보를 살린다."""
+        scanner, exchange, telegram, portfolio = _make_scanner()
+        exchange.get_liquid_symbols.return_value = ["TEST/KRW"]
+        bars = [_make_bar(100 + (i % 2)) for i in range(10)] + [_make_bar(103, volume=100.0)]
+        exchange.get_ohlcv.side_effect = [RuntimeError("429 Too Many Requests"), bars]
+        sleeps: list[float] = []
+        monkeypatch.setattr("src.breakout.scanner.time.sleep", lambda s: sleeps.append(s))
+
+        scanner.scan_for_entries()
+
+        assert "TEST/KRW" in scanner.open_symbols
+        assert exchange.get_ohlcv.call_count == 2
+        assert 2.0 in sleeps  # 재시도 전 backoff
+
+    def test_ohlcv_fetch_fails_after_extra_retry_is_skipped(self, monkeypatch) -> None:
+        """재시도까지 다 실패하면 예외 없이 그 후보만 건너뛴다."""
+        scanner, exchange, telegram, portfolio = _make_scanner()
+        exchange.get_liquid_symbols.return_value = ["TEST/KRW"]
+        exchange.get_ohlcv.side_effect = RuntimeError("429 Too Many Requests")
+        monkeypatch.setattr("src.breakout.scanner.time.sleep", lambda s: None)
+
+        scanner.scan_for_entries()  # should not raise
+
+        assert scanner.open_symbols == []
+        assert exchange.get_ohlcv.call_count == 2
+
+    def test_candidate_scan_paces_requests(self, monkeypatch) -> None:
+        """후보 조회 사이에 candidate_scan_delay_seconds만큼 간격을 둔다."""
+        scanner, exchange, telegram, portfolio = _make_scanner(
+            scanner_cfg=ScannerConfig(max_concurrent_positions=2, candidate_scan_delay_seconds=0.3)
+        )
+        exchange.get_liquid_symbols.return_value = ["TEST/KRW"]
+        bars = [_make_bar(100) for _ in range(11)]
+        exchange.get_ohlcv.return_value = bars
+        sleeps: list[float] = []
+        monkeypatch.setattr("src.breakout.scanner.time.sleep", lambda s: sleeps.append(s))
+
+        scanner.scan_for_entries()
+
+        assert 0.3 in sleeps
+
 
 class TestCheckExits:
     def test_stop_loss_closes_position(self) -> None:
