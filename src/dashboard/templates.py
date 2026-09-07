@@ -597,12 +597,14 @@ function renderTicks(items, flashSymbol, prevTick) {{
     </tr>`;
   }}).join('');
 
-  // 100원 미만 저가 코인은 엔진의 최소 단가 필터(_MIN_ENTRY_PRICE_KRW)로 실제 진입이
+  // 1,000원 미만 저가 코인은 엔진의 최소 단가 필터(_MIN_ENTRY_PRICE_KRW)로 실제 진입이
   // 되지 않으므로, 신호평가 목록에도 노출하지 않고 그 다음 순위 종목으로 채운다.
+  // (최초 100원 기준이었으나, 가격 구간별 거래 재분석 결과 100~1,000원 구간도
+  // profit_factor 0.86으로 손실 우위라 1,000원으로 상향 — engine.py 참고)
   // price 메타데이터가 없는 항목(구버전 tick 등)은 안전하게 그대로 표기한다.
   const filtered = items.filter(t => {{
     const p = (t.metadata || {{}}).price;
-    return p == null || p >= 100;
+    return p == null || p >= 1000;
   }});
   // 1-10위만 표기 (11-20위 탭은 상위 심볼 수 축소 이후 항상 비어 있어 제거됨)
   const top10 = filtered.slice(0, 10);

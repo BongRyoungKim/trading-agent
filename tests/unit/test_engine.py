@@ -210,7 +210,7 @@ class TestProcessSymbol:
 
     def test_buy_signal_below_min_entry_price_is_skipped(self, engine, strategy, portfolio):
         strategy.generate_signal.return_value = _make_signal(
-            SignalAction.BUY, metadata={"price": 99.0}
+            SignalAction.BUY, metadata={"price": 999.0}
         )
         portfolio.has_position.return_value = False
         with patch.object(engine, "_open_position") as mock_open:
@@ -219,7 +219,7 @@ class TestProcessSymbol:
 
     def test_buy_signal_at_or_above_min_entry_price_opens(self, engine, strategy, portfolio):
         strategy.generate_signal.return_value = _make_signal(
-            SignalAction.BUY, metadata={"price": 100.0}
+            SignalAction.BUY, metadata={"price": 1000.0}
         )
         portfolio.has_position.return_value = False
         with patch.object(engine, "_open_position") as mock_open:
