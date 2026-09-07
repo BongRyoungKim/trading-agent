@@ -343,3 +343,35 @@ class TestGetTopSymbolsByVolume:
         )
         result = upbit_client.get_top_symbols_by_volume(n=2, max_volatility_pct=20.0)
         assert result == ["BTC/KRW", "XRP/KRW"]
+
+    def test_excludes_symbol_below_min_price(
+        self, upbit_client: UpbitClient, mock_ccxt_upbit: MagicMock
+    ) -> None:
+        """
+        대시보드 신호평가 목록이 1,000원 미만 코인 제외 필터 적용 후 만성적으로
+        7개 수준밖에 안 채워지던 문제의 원인 재현 — 추적 풀(top-N) 선정 시점
+        에서는 가격을 전혀 보지 않아 저가 코인이 top-N 슬롯을 차지했었다.
+        min_price_krw 지정 시 순위 산정 전에 저가 코인을 제외해야 한다.
+        """
+        self._setup(
+            mock_ccxt_upbit,
+            {
+                "PENNY/KRW": {"quoteVolume": 300_000_000_000, "high": 51, "low": 50, "last": 50},
+                "BTC/KRW": {"quoteVolume": 100_000_000_000, "high": 108862000, "low": 107255000, "last": 108000000},
+            },
+        )
+        result = upbit_client.get_top_symbols_by_volume(
+            n=10, max_volatility_pct=20.0, min_price_krw=1000.0
+        )
+        assert result == ["BTC/KRW"]
+
+    def test_min_price_default_is_zero_no_filtering(
+        self, upbit_client: UpbitClient, mock_ccxt_upbit: MagicMock
+    ) -> None:
+        """min_price_krw를 지정하지 않으면 기존과 동일하게 가격으로 거르지 않는다."""
+        self._setup(
+            mock_ccxt_upbit,
+            {"PENNY/KRW": {"quoteVolume": 300_000_000_000, "high": 51, "low": 50, "last": 50}},
+        )
+        result = upbit_client.get_top_symbols_by_volume(n=10, max_volatility_pct=20.0)
+        assert result == ["PENNY/KRW"]

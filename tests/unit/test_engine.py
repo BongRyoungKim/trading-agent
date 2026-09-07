@@ -428,6 +428,29 @@ class TestTradingEngineLifecycle:
         assert "daily_report" not in job_ids
 
 
+# ── Dynamic symbol refresh ─────────────────────────────────────────────────────
+
+class TestSymbolRefresh:
+    """
+    대시보드 신호평가 목록이 1,000원 미만 저가 코인 필터 이후 만성적으로
+    10개를 못 채우던 문제 — 원인은 추적 풀(top-N) 선정 단계(get_top_symbols_
+    by_volume)에서 가격을 전혀 고려하지 않아 저가 코인이 top-N 슬롯을
+    차지했기 때문. _refresh_symbols()가 엔진의 최소 진입 단가 기준을 그대로
+    넘겨 추적 단계에서부터 걸러내는지 검증한다.
+    """
+
+    def test_passes_min_entry_price_to_top_symbols_lookup(self, engine) -> None:
+        engine._exchange.get_top_symbols_by_volume = MagicMock(return_value=["BTC/USDT"])
+
+        engine._refresh_symbols()
+
+        engine._exchange.get_top_symbols_by_volume.assert_called_once_with(
+            engine._top_n_symbols,
+            max_volatility_pct=engine._max_symbol_volatility_pct,
+            min_price_krw=1000.0,
+        )
+
+
 # ── Stop-loss / Take-profit ───────────────────────────────────────────────────
 
 class TestStopLossAndTakeProfit:

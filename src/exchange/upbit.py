@@ -165,7 +165,7 @@ class UpbitClient(BaseExchangeClient):
 
     @retry(max_attempts=3, base_delay=2.0)
     def get_top_symbols_by_volume(
-        self, n: int = 20, max_volatility_pct: float = 20.0
+        self, n: int = 20, max_volatility_pct: float = 20.0, min_price_krw: float = 0.0
     ) -> list[str]:
         """
         Return top N active KRW-market symbols ranked by 24h quote volume.
@@ -180,6 +180,15 @@ class UpbitClient(BaseExchangeClient):
         뚫고 급락해 큰 손실이 난 사고가 있었음 — 그 시점 SKR의 24h 고가/저가
         범위는 약 60%였다). 24h 순변동률(%change)만으로는 이런 왕복성 급등락을
         못 잡아내서(오르고 내리면 순변동은 작게 나옴) high/low 범위를 쓴다.
+
+        min_price_krw 미만인 종목도 순위 산정 전에 제외한다. 업비트 거래대금
+        상위권은 원화 단가가 매우 낮은 동전코인이 상당수를 차지하는데, 이런
+        종목을 걸러내지 않고 추적 풀(top-N)에 그대로 채우면 엔진의 최소 진입
+        단가 필터(_MIN_ENTRY_PRICE_KRW)에 걸려 실제로는 진입도 못 하는 종목이
+        추적 슬롯만 차지하게 된다. 그 결과 대시보드 신호평가 목록(가격 필터
+        적용 후 상위 10개 표기)이 만성적으로 10개를 못 채우고 6~7개 수준에
+        머무는 문제가 있었다 — 추적 단계에서부터 같은 기준으로 제외해
+        top-N 슬롯이 전부 실제 거래 가능한 종목으로 채워지게 한다.
         """
         try:
             if not self._exchange.markets:
@@ -193,6 +202,7 @@ class UpbitClient(BaseExchangeClient):
                     if sym.endswith("/KRW")
                     and (data.get("quoteVolume") or 0) > 0
                     and _within_volatility_limit(data, max_volatility_pct)
+                    and float(data.get("last") or 0) >= min_price_krw
                 ),
                 key=lambda x: x[1],
                 reverse=True,

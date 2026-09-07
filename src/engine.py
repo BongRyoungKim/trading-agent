@@ -1067,8 +1067,15 @@ class TradingEngine:
         scheduler to track them. Dropped symbols with open positions are kept.
         """
         try:
+            # min_price_krw: 최소 진입 단가 필터(_MIN_ENTRY_PRICE_KRW)에 걸려 애초에
+            # 진입이 불가능한 저가 동전코인을 추적 풀 선정 단계에서부터 제외한다.
+            # 여기서 걸러두지 않으면 top-N 슬롯 상당수가 저가 코인으로 채워져
+            # 대시보드 신호평가 목록(가격 필터 적용 후 상위 10개 표기)이 만성적으로
+            # 10개를 못 채우는 문제가 있었다.
             new_top: list[str] = self._exchange.get_top_symbols_by_volume(  # type: ignore[attr-defined]
-                self._top_n_symbols, max_volatility_pct=self._max_symbol_volatility_pct
+                self._top_n_symbols,
+                max_volatility_pct=self._max_symbol_volatility_pct,
+                min_price_krw=float(self._MIN_ENTRY_PRICE_KRW),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Symbol refresh failed: {exc}")
