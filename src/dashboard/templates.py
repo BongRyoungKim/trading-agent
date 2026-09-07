@@ -597,8 +597,15 @@ function renderTicks(items, flashSymbol, prevTick) {{
     </tr>`;
   }}).join('');
 
+  // 100원 미만 저가 코인은 엔진의 최소 단가 필터(_MIN_ENTRY_PRICE_KRW)로 실제 진입이
+  // 되지 않으므로, 신호평가 목록에도 노출하지 않고 그 다음 순위 종목으로 채운다.
+  // price 메타데이터가 없는 항목(구버전 tick 등)은 안전하게 그대로 표기한다.
+  const filtered = items.filter(t => {{
+    const p = (t.metadata || {{}}).price;
+    return p == null || p >= 100;
+  }});
   // 1-10위만 표기 (11-20위 탭은 상위 심볼 수 축소 이후 항상 비어 있어 제거됨)
-  const top10 = items.slice(0, 10);
+  const top10 = filtered.slice(0, 10);
   const panelHtml = top10.length
     ? thead + mkRows(top10, 0) + '</tbody></table>'
     : '<p class="empty">데이터 없음</p>';
