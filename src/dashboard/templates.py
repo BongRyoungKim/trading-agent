@@ -538,6 +538,8 @@ function renderTicks(items, flashSymbol, prevTick) {{
     if (v == null) return '-';
     if (sym.includes('BTC') || sym.includes('ETH') || sym.includes('SOL') || sym.includes('TAO'))
       return '₩' + Math.round(v).toLocaleString('ko-KR');
+    // BONK 등 1원 미만 초저가 코인은 2자리 반올림 시 0으로 뭉개지므로 소수 자리를 늘려 표시
+    if (v < 1) return '₩' + v.toFixed(6);
     return '₩' + v.toLocaleString('ko-KR', {{maximumFractionDigits:2}});
   }};
   const fmtKRW = v => v != null ? '₩' + Math.round(v).toLocaleString('ko-KR') : '-';
