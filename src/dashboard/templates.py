@@ -529,6 +529,18 @@ function _renderTicksFromMap(updatedSymbol, prevTick) {{
   }});
   renderTicks(items, updatedSymbol, prevTick);
 }}
+// 신호평가 목록 행 클릭 시 업비트 해당 코인 거래소 페이지를 새 창(탭)으로 연다.
+// 심볼 형식은 "BASE/QUOTE"(예: BTC/KRW) → 업비트 code 파라미터 형식인
+// "CRIX.UPBIT.{{QUOTE}}-{{BASE}}"로 변환한다. 차트 봉 시간단위(1시간 등)를 URL
+// 파라미터로 강제 지정하는 공식 방법은 업비트 쪽에서 확인되지 않아 별도로
+// 지정하지 않는다 — 열리는 차트의 시간단위는 업비트 화면 자체의 기본값/직전
+// 설정을 따른다.
+function openUpbit(symbol) {{
+  const [base, quote] = symbol.split('/');
+  if (!base || !quote) return;
+  const url = `https://upbit.com/exchange?code=CRIX.UPBIT.${{quote}}-${{base}}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}}
 function renderTicks(items, flashSymbol, prevTick) {{
   const el = document.getElementById('ticks-body');
   if (!el) return;
@@ -583,7 +595,9 @@ function renderTicks(items, flashSymbol, prevTick) {{
       <span style="margin:0 3px;color:#334155;font-size:.7rem">│</span>
       ${{sellPill('D',c.death_cross,'데스크로스')}}${{sellPill('M',c.macd_turned_neg,'MACD 음전환')}}
     </td>`;
-    return `<tr class="${{flash}}" id="tick-row-${{t.symbol.replace('/','_')}}">
+    return `<tr class="${{flash}}" id="tick-row-${{t.symbol.replace('/','_')}}"
+        onclick="openUpbit('${{t.symbol}}')" style="cursor:pointer"
+        title="클릭 시 업비트 ${{t.symbol}} 거래소 페이지가 새 창으로 열립니다">
       <td style="text-align:center;color:#475569;font-size:.72rem;font-weight:600">${{rank}}</td>
       <td><code>${{t.symbol}}</code></td>
       <td>${{regimeBadge(m.regime)}}</td>

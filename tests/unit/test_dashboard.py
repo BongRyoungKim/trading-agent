@@ -220,6 +220,14 @@ class TestRenderDashboard:
         assert "9,500.00" in html
         assert "-500.00" in html
 
+    def test_html_signal_row_click_opens_upbit(self) -> None:
+        """신호평가 목록 행 클릭 시 새 창으로 업비트 해당 코인 페이지로 이동해야 한다."""
+        html = render_dashboard(self._status(), [], {})
+        assert "function openUpbit(symbol)" in html
+        assert "upbit.com/exchange?code=CRIX.UPBIT." in html
+        assert "window.open(url, '_blank', 'noopener,noreferrer')" in html
+        assert "onclick=\"openUpbit('${t.symbol}')\"" in html
+
     def test_html_no_external_cdn(self) -> None:
         html = render_dashboard(self._status(), [], {})
         assert "cdn.jsdelivr" not in html
