@@ -35,6 +35,12 @@ ENV/
 *.csv
 *.db
 *.sqlite
+/trading-agent-logs/
+
+# SSH keys (NEVER commit)
+ssh-key-*
+*.pem
+*.key
 
 # IDE
 .vscode/
