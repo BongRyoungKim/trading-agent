@@ -134,6 +134,17 @@ class TestMain:
         _, patches = _run_main([], settings=_mock_settings(exchange="binance"))
         patches["BinanceClient"].assert_called_once()
 
+    def test_bybit_exchange_raises_configuration_error(self):
+        """
+        exchange=bybit has no BybitClient implementation. Must fail loudly at
+        startup instead of silently falling back to BinanceClient (regression
+        test for a real bug where bybit configs silently traded on Binance).
+        """
+        from src.utils.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError):
+            _run_main([], settings=_mock_settings(exchange="bybit"))
+
     def test_engine_created_with_correct_settings(self):
         settings = _mock_settings()
         _, patches = _run_main([], settings=settings)
