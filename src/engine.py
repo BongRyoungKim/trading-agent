@@ -86,6 +86,8 @@ class TradingEngine:
         self._sl_ceiling_pct: Decimal = Decimal("1.5")   # min SL distance from entry, %
         self._atr_multiplier: float = 2.0
         self._tp_rr_multiplier: Decimal = Decimal("1.5")
+        self._time_stop_minutes: float = 60.0
+        self._time_stop_loss_pct: Decimal = Decimal("0.5")
         self._start_time: float | None = None
         self._data_validator = OHLCVValidator()
         self._scheduler = BackgroundScheduler(daemon=True)
@@ -202,6 +204,22 @@ class TradingEngine:
         self._tp_rr_multiplier = Decimal(str(value))
 
     @property
+    def time_stop_minutes(self) -> float:
+        return self._time_stop_minutes
+
+    @time_stop_minutes.setter
+    def time_stop_minutes(self, value: float) -> None:
+        self._time_stop_minutes = float(value)
+
+    @property
+    def time_stop_loss_pct(self) -> Decimal:
+        return self._time_stop_loss_pct
+
+    @time_stop_loss_pct.setter
+    def time_stop_loss_pct(self, value: float | Decimal) -> None:
+        self._time_stop_loss_pct = Decimal(str(value))
+
+    @property
     def symbol_blacklist(self) -> frozenset[str]:
         return self._symbol_blacklist
 
@@ -275,6 +293,8 @@ class TradingEngine:
             take_profit=pos.take_profit,
             trailing_stop_pct=trailing_pct,
             side=pos.side,
+            time_stop_minutes=self._time_stop_minutes,
+            time_stop_loss_pct=self._time_stop_loss_pct,
         )
         if decision.updated_stop_loss != pos.stop_loss:
             pos = self._portfolio.update_stop_loss(symbol, decision.updated_stop_loss)
@@ -303,8 +323,9 @@ class TradingEngine:
 
         if decision.reason == "time_stop":
             logger.info(
-                "Time-stop triggered — position losing after 45 min",
+                "Time-stop triggered — position losing after configured hold time",
                 symbol=symbol,
+                time_stop_minutes=self._time_stop_minutes,
                 hold_min=round(hold_min),
                 entry_price=float(pos.entry_price),
                 price=float(price),

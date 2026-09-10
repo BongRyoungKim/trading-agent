@@ -552,6 +552,77 @@ class TestStopLossAndTakeProfit:
         mock_close.assert_not_called()
 
 
+# ── Configurable time-stop ───────────────────────────────────────────────────
+# time_stop_minutes/time_stop_loss_pct default to the previously-hardcoded
+# 60 min / -0.5% (src/risk/exit_rules.py), but are now live-tunable knobs
+# (same pattern as sl_ceiling_pct etc.) — backtest research found extending
+# the grace period to 300 min improves PF on out-of-sample data.
+
+class TestConfigurableTimeStop:
+    def test_time_stop_minutes_defaults_to_60(self, engine):
+        assert engine.time_stop_minutes == 60.0
+
+    def test_time_stop_loss_pct_defaults_to_0_5(self, engine):
+        assert engine.time_stop_loss_pct == Decimal("0.5")
+
+    def test_time_stop_minutes_setter(self, engine):
+        engine.time_stop_minutes = 300.0
+        assert engine.time_stop_minutes == 300.0
+
+    def test_time_stop_loss_pct_setter(self, engine):
+        engine.time_stop_loss_pct = 0.8
+        assert engine.time_stop_loss_pct == Decimal("0.8")
+
+    def test_default_time_stop_triggers_at_61_minutes(self, engine, exchange, portfolio):
+        """Unchanged default behaviour: 61 min held, -0.6% (past -0.5% default) -> time_stop."""
+        pos = _make_position_mock(
+            entry=50000.0, entry_time=datetime.now(UTC) - timedelta(minutes=61)
+        )
+        portfolio.has_position.return_value = True
+        portfolio.get_position.return_value = pos
+        exchange.get_ticker.return_value = _make_ticker(49700.0)  # -0.6%
+        engine._strategy_provider.generate_signal.return_value = _make_signal(SignalAction.HOLD)
+
+        with patch.object(engine, "_close_position") as mock_close:
+            engine._process_symbol("BTC/USDT")
+
+        mock_close.assert_called_once()
+        assert mock_close.call_args[1]["reason"] == "time_stop"
+
+    def test_extended_time_stop_does_not_trigger_at_61_minutes(self, engine, exchange, portfolio):
+        """With time_stop_minutes=300, the same 61-minute/-0.6% position must NOT
+        be force-closed yet — this is the researched change (candidateA)."""
+        engine.time_stop_minutes = 300.0
+        pos = _make_position_mock(
+            entry=50000.0, entry_time=datetime.now(UTC) - timedelta(minutes=61)
+        )
+        portfolio.has_position.return_value = True
+        portfolio.get_position.return_value = pos
+        exchange.get_ticker.return_value = _make_ticker(49700.0)  # -0.6%
+        engine._strategy_provider.generate_signal.return_value = _make_signal(SignalAction.HOLD)
+
+        with patch.object(engine, "_close_position") as mock_close:
+            engine._process_symbol("BTC/USDT")
+
+        mock_close.assert_not_called()
+
+    def test_extended_time_stop_triggers_past_300_minutes(self, engine, exchange, portfolio):
+        engine.time_stop_minutes = 300.0
+        pos = _make_position_mock(
+            entry=50000.0, entry_time=datetime.now(UTC) - timedelta(minutes=301)
+        )
+        portfolio.has_position.return_value = True
+        portfolio.get_position.return_value = pos
+        exchange.get_ticker.return_value = _make_ticker(49700.0)  # -0.6%
+        engine._strategy_provider.generate_signal.return_value = _make_signal(SignalAction.HOLD)
+
+        with patch.object(engine, "_close_position") as mock_close:
+            engine._process_symbol("BTC/USDT")
+
+        mock_close.assert_called_once()
+        assert mock_close.call_args[1]["reason"] == "time_stop"
+
+
 class TestHighestPriceRatchet:
     """신고가(highest_price) 갱신 — 트레일링 스탑 계산과는 별개로, 대시보드
     표시를 위해 매 틱마다 신고가를 갱신하는지 검증."""

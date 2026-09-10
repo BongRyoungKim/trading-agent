@@ -34,6 +34,8 @@ DEFAULT_RISK = {
     "sl_ceiling_pct": 1.5,
     "atr_multiplier": 2.0,
     "tp_rr_multiplier": 1.5,
+    "time_stop_minutes": 60.0,
+    "time_stop_loss_pct": 0.5,
     "consecutive_loss_limit": 3,             # 0 = circuit breaker disabled
     "consecutive_loss_cooldown_minutes": 720,  # 12h
 }
@@ -54,6 +56,8 @@ def main() -> None:
         f"--sl-ceiling-pct {risk['sl_ceiling_pct']}",
         f"--atr-multiplier {risk['atr_multiplier']}",
         f"--tp-rr-multiplier {risk['tp_rr_multiplier']}",
+        f"--time-stop-minutes {risk['time_stop_minutes']}",
+        f"--time-stop-loss-pct {risk['time_stop_loss_pct']}",
         f"--consecutive-loss-limit {risk['consecutive_loss_limit']}",
         f"--consecutive-loss-cooldown-min {risk['consecutive_loss_cooldown_minutes']}",
     ]

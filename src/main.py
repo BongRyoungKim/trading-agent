@@ -226,6 +226,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Take-profit distance as a multiple of the SL distance (default: 1.5).",
     )
     p.add_argument(
+        "--time-stop-minutes",
+        type=float,
+        default=60.0,
+        dest="time_stop_minutes",
+        help="Minutes held before a still-losing position is force-closed (default: 60.0).",
+    )
+    p.add_argument(
+        "--time-stop-loss-pct",
+        type=float,
+        default=0.5,
+        dest="time_stop_loss_pct",
+        help="Loss threshold (below entry, percent) that triggers the time-stop (default: 0.5).",
+    )
+    p.add_argument(
         "--consecutive-loss-limit",
         type=int,
         default=3,
@@ -487,6 +501,8 @@ def main() -> None:
     engine.sl_ceiling_pct = args.sl_ceiling_pct
     engine.atr_multiplier = args.atr_multiplier
     engine.tp_rr_multiplier = args.tp_rr_multiplier
+    engine.time_stop_minutes = args.time_stop_minutes
+    engine.time_stop_loss_pct = args.time_stop_loss_pct
     if args.exclude_symbols:
         engine.symbol_blacklist = args.exclude_symbols
         logger.info("Symbol blacklist applied", excluded=args.exclude_symbols)
