@@ -271,11 +271,30 @@ class TestOpenPosition:
         telegram.send_risk_alert.assert_called_once()
 
     def test_zero_amount_skips_open(self, engine, exchange, portfolio):
-        # If stop_loss == entry_price, fixed_fraction returns 0
+        # percent_of_equity returns 0 when entry_price is 0 (or cash is 0)
         exchange.get_ticker.return_value = _make_ticker(50000.0)
-        with patch("src.engine.fixed_fraction", return_value=Decimal("0")):
+        with patch("src.engine.percent_of_equity", return_value=Decimal("0")):
             engine._open_position("BTC/USDT")
         portfolio.open_position.assert_not_called()
+
+    def test_position_size_pct_defaults_to_0_25(self, engine):
+        assert engine.position_size_pct == 0.25
+
+    def test_position_size_pct_setter(self, engine):
+        engine.position_size_pct = 0.10
+        assert engine.position_size_pct == 0.10
+
+    def test_open_position_sizes_to_configured_pct_of_cash(self, engine, exchange, portfolio):
+        """amount = (cash * position_size_pct) / price — not risk/SL-distance based."""
+        portfolio.cash = Decimal("1000000")
+        engine.position_size_pct = 0.20
+        exchange.get_ticker.return_value = _make_ticker(50000.0)
+
+        engine._open_position("BTC/USDT")
+
+        amount = portfolio.open_position.call_args[1]["amount"]
+        # (1,000,000 * 0.20) / 50,000 = 4.0
+        assert amount == Decimal("4")
 
     def test_live_mode_calls_exchange_place_order(
         self, settings, exchange, strategy, risk_manager, portfolio, telegram

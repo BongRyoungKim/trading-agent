@@ -226,6 +226,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Take-profit distance as a multiple of the SL distance (default: 1.5).",
     )
     p.add_argument(
+        "--position-size-pct",
+        type=float,
+        default=0.25,
+        dest="position_size_pct",
+        help="Fraction of available cash sized into each new position (default: 0.25 = 25%%, "
+             "i.e. up to 4 concurrent positions). Pairs with MAX_OPEN_POSITIONS.",
+    )
+    p.add_argument(
         "--time-stop-minutes",
         type=float,
         default=60.0,
@@ -503,6 +511,7 @@ def main() -> None:
     engine.tp_rr_multiplier = args.tp_rr_multiplier
     engine.time_stop_minutes = args.time_stop_minutes
     engine.time_stop_loss_pct = args.time_stop_loss_pct
+    engine.position_size_pct = args.position_size_pct
     if args.exclude_symbols:
         engine.symbol_blacklist = args.exclude_symbols
         logger.info("Symbol blacklist applied", excluded=args.exclude_symbols)

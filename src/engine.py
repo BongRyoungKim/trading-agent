@@ -21,7 +21,7 @@ from src.portfolio.journal_store import SQLiteJournalStore
 from src.portfolio.tracker import PortfolioTracker
 from src.risk.exit_rules import clamp_stop_loss_and_size_take_profit, evaluate_open_position_exit, is_signal_exit_allowed
 from src.risk.manager import RiskManager
-from src.risk.position_sizing import fixed_fraction
+from src.risk.position_sizing import percent_of_equity
 from src.strategy.base import BaseStrategy, StrategyFactory
 from src.strategy.models import SignalAction
 from src.data.validator import OHLCVValidator
@@ -88,6 +88,17 @@ class TradingEngine:
         self._tp_rr_multiplier: Decimal = Decimal("1.5")
         self._time_stop_minutes: float = 60.0
         self._time_stop_loss_pct: Decimal = Decimal("0.5")
+        # Fraction of cash notional per position (default 25% -> up to 4
+        # concurrent positions at settings.max_open_positions=4). Replaces
+        # the old risk_fraction/stop-distance sizing, which routinely sized
+        # to >100% of cash (2% risk / ~1.5% typical clamped SL distance) and
+        # was clamped down to ~99% of cash every time — meaning only one
+        # position could ever be open concurrently regardless of
+        # max_open_positions. Diversifying across several smaller positions
+        # trades unchanged expected return (PF/win-rate are per-trade %
+        # returns, unaffected by sizing) for materially lower portfolio
+        # variance, which is worth it while the strategy's edge is thin.
+        self._position_size_pct: float = 0.25
         self._start_time: float | None = None
         self._data_validator = OHLCVValidator()
         self._scheduler = BackgroundScheduler(daemon=True)
@@ -218,6 +229,14 @@ class TradingEngine:
     @time_stop_loss_pct.setter
     def time_stop_loss_pct(self, value: float | Decimal) -> None:
         self._time_stop_loss_pct = Decimal(str(value))
+
+    @property
+    def position_size_pct(self) -> float:
+        return self._position_size_pct
+
+    @position_size_pct.setter
+    def position_size_pct(self, value: float) -> None:
+        self._position_size_pct = float(value)
 
     @property
     def symbol_blacklist(self) -> frozenset[str]:
@@ -766,11 +785,10 @@ class TradingEngine:
             tp_rr_multiplier=self._tp_rr_multiplier,
         )
 
-        amount = fixed_fraction(
+        amount = percent_of_equity(
             capital=self._portfolio.cash,
-            risk_fraction=self._settings.max_position_risk,
+            pct=self._position_size_pct,
             entry_price=price,
-            stop_loss_price=stop_loss,
         )
 
         if amount <= 0:
@@ -798,8 +816,9 @@ class TradingEngine:
         try:
             self._risk_manager.check_can_open_position()
         except PositionLimitExceededError:
-            # Normal operating behaviour — max 1 concurrent position is active.
-            # Log at DEBUG only; no Telegram alert (not an error condition).
+            # Normal operating behaviour — settings.max_open_positions concurrent
+            # positions are already open. Log at DEBUG only; no Telegram alert
+            # (not an error condition).
             logger.debug(
                 "Position limit active — buy skipped",
                 symbol=symbol,

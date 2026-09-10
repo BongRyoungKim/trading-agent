@@ -235,6 +235,33 @@ class TestFullTradingLoop:
         eng.tick("BTC/USDT")
         assert not port.has_position("BTC/USDT")
 
+    def test_position_size_pct_allows_meaningfully_sized_concurrent_positions(
+        self, settings, exchange, strategy, telegram
+    ):
+        """Percent-of-cash sizing (default 20%) must leave enough cash for a
+        second concurrent position at a real size — the old risk/SL-distance
+        sizing routinely consumed ~99% of cash on the very first trade
+        (2% risk / ~1.5% typical clamped SL distance -> >100% of cash,
+        clamped down to 99%), so a configured max_open_positions > 1 never
+        actually resulted in diversified concurrent positions in practice."""
+        initial_cash = Decimal("2000000")
+        port = PortfolioTracker(initial_cash=initial_cash)
+        state = PortfolioState(capital=initial_cash, peak_capital=initial_cash)
+        rm = RiskManager(settings, state)  # settings fixture: max_open_positions=5
+        eng = TradingEngine(settings, exchange, strategy, rm, port, telegram)
+
+        exchange.get_ohlcv_dataframe.return_value = _make_buy_df()
+        exchange.get_ticker.return_value = _make_ticker(60000.0)
+        eng.tick("BTC/USDT")
+        pos1 = port.get_position("BTC/USDT")
+        notional1 = pos1.amount * pos1.entry_price
+        assert notional1 >= initial_cash * Decimal("0.15")
+
+        eng.tick("ETH/USDT")
+        pos2 = port.get_position("ETH/USDT")
+        notional2 = pos2.amount * pos2.entry_price
+        assert notional2 >= initial_cash * Decimal("0.10")
+
     def test_tick_error_does_not_crash_engine(self, engine, exchange):
         """Exchange error inside tick is caught; engine remains operational."""
         exchange.get_ohlcv_dataframe.side_effect = RuntimeError("network error")
