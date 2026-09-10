@@ -427,6 +427,46 @@ class TestTradingEngineLifecycle:
         job_ids = [call[1].get("id") for call in mock_scheduler.add_job.call_args_list]
         assert "daily_report" not in job_ids
 
+    def test_news_tuning_job_has_generous_misfire_grace_time(self, engine):
+        """
+        회귀 테스트 — 뉴스 튜너 cron job(hour=8, 1일 1회)이 실제 서버에서
+        42시간 넘게(2026-09-08~09-10, 09-09/09-10 08:00 KST 두 차례 통과)
+        단 한 번도 실행 로그를 남기지 않은 장애의 재현.
+
+        원인: APScheduler BackgroundScheduler의 기본 job_defaults는
+        misfire_grace_time=1(초)이다. 1 vCPU 프리티어 VM에서 다른 심볼
+        tick job들의 동기 네트워크 I/O로 GIL이 잠깐이라도 점유돼 스케줄러의
+        정시 체크가 1초를 넘기면, cron job은 그날 실행이 조용히
+        스킵된다(EVENT_JOB_MISSED 리스너가 없어 로그도 전혀 안 남음 — 실제
+        서버 로그에서도 성공/실패 로그가 전무했던 것과 일치).
+
+        타임존(Asia/Seoul)은 이미 올바르게 적용되고 있음을 별도로 확인함
+        (컨테이너 내 tzlocal.get_localzone() 직접 검증) — 이 테스트가
+        다루는 것은 타임존이 아니라 misfire_grace_time 기본값 문제다.
+        """
+        mock_scheduler = MagicMock()
+        mock_scheduler.running = False
+        engine._scheduler = mock_scheduler
+
+        with patch.object(engine, "_register_signal_handlers"):
+            threading.Thread(target=engine.stop, daemon=True).start()
+            engine.start(
+                ["BTC/USDT"], interval_seconds=60, daily_report_hour=None,
+                news_tuning_hour=8,
+            )
+
+        news_tuning_calls = [
+            call for call in mock_scheduler.add_job.call_args_list
+            if call[1].get("id") == "news_tuning"
+        ]
+        assert len(news_tuning_calls) == 1
+        misfire_grace_time = news_tuning_calls[0][1].get("misfire_grace_time")
+        assert misfire_grace_time is not None
+        assert misfire_grace_time >= 3600, (
+            "misfire_grace_time이 기본값(1초)에 가깝게 너무 짧으면 스케줄러 "
+            "체크가 잠깐만 지연돼도 그날 실행이 조용히 스킵된다"
+        )
+
 
 # ── Dynamic symbol refresh ─────────────────────────────────────────────────────
 

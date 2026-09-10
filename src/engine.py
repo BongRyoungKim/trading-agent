@@ -517,6 +517,15 @@ class TradingEngine:
                 trigger="cron",
                 hour=news_tuning_hour,
                 minute=0,
+                # APScheduler BackgroundScheduler의 기본 misfire_grace_time은
+                # 1초다 — 1일 1회 cron job에는 지나치게 빡빡하다. 단일 vCPU
+                # 프리티어 VM에서 다른 심볼 tick job들의 동기 네트워크 I/O로
+                # 정시 체크가 1초만 넘겨도 그날 실행이 (로그 한 줄 없이)
+                # 조용히 스킵되는 장애가 실제로 있었다(2026-09-08~09-10,
+                # 두 차례의 08:00 KST 실행 기회가 전부 무응답). 3600초(1시간)
+                # 여유를 둬서 짧은 지연으로 하루치 실행 자체가 통째로
+                # 사라지는 일을 막는다.
+                misfire_grace_time=3600,
                 id="news_tuning",
             )
             logger.info(

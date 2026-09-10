@@ -189,10 +189,16 @@ class UpbitClient(BaseExchangeClient):
         적용 후 상위 10개 표기)이 만성적으로 10개를 못 채우고 6~7개 수준에
         머무는 문제가 있었다 — 추적 단계에서부터 같은 기준으로 제외해
         top-N 슬롯이 전부 실제 거래 가능한 종목으로 채워지게 한다.
+
+        매 호출마다 load_markets(reload=True)로 마켓 목록을 강제로 새로
+        불러온다 — get_liquid_symbols()에서 발견된 것과 같은 문제
+        (상장폐지/변경된 마켓 코드가 캐시에 남아 fetch_tickers() 배치
+        요청 전체가 404로 실패)가 이 경로(라이브 엔진이 10분마다 호출하는
+        심볼 자동선정)에도 그대로 존재한다. 이 메서드는 10분마다만
+        호출되므로 매번 재조회해도 비용이 낮다.
         """
         try:
-            if not self._exchange.markets:
-                self._exchange.load_markets()
+            self._exchange.load_markets(reload=True)
             krw_symbols = [s for s in self._exchange.markets if s.endswith("/KRW")]
             tickers = self._exchange.fetch_tickers(krw_symbols)
             ranked = sorted(
@@ -222,10 +228,18 @@ class UpbitClient(BaseExchangeClient):
         후보 필터용이고, 그 모듈은 오히려 변동성이 큰 종목을 찾아내는 게
         목적이라 여기서 걸러내면 안 된다. 라이브 엔진의 심볼 자동선정과는
         완전히 별개 용도.
+
+        매 호출마다 load_markets(reload=True)로 마켓 목록을 강제로 새로
+        불러온다 — get_top_symbols_by_volume()처럼 한 번 캐시된 마켓
+        목록을 프로세스 수명 내내 재사용하면, 그 사이 업비트에서
+        상장폐지/변경된 마켓 코드가 캐시에 남아 fetch_tickers()의 배치
+        요청(?markets=A,B,C...) 전체가 404 "Code not found"로 실패하는
+        장애가 있었다(2026-09-08~09-10, 42시간 동안 505회 연속 실패).
+        이 메서드는 5분마다(페이퍼 전용) 호출되므로 매번 재조회해도
+        비용이 낮다.
         """
         try:
-            if not self._exchange.markets:
-                self._exchange.load_markets()
+            self._exchange.load_markets(reload=True)
             krw_symbols = [s for s in self._exchange.markets if s.endswith("/KRW")]
             tickers = self._exchange.fetch_tickers(krw_symbols)
             ranked = sorted(

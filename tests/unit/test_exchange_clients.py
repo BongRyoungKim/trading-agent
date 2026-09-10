@@ -375,3 +375,54 @@ class TestGetTopSymbolsByVolume:
         )
         result = upbit_client.get_top_symbols_by_volume(n=10, max_volatility_pct=20.0)
         assert result == ["PENNY/KRW"]
+
+
+class TestGetLiquidSymbols:
+    """
+    브레이크아웃 스캐너 404 "Code not found" 사고 회귀 테스트.
+
+    근본 원인: self._exchange.markets가 한 번 채워지면 프로세스 수명 내내
+    재조회하지 않아, 그 사이 업비트에서 상장폐지/변경된 마켓 코드가 캐시에
+    남는다. ccxt upbit.fetch_tickers()는 심볼 목록을 하나의 배치 요청
+    (?markets=A,B,C...)으로 묶어 보내므로, 캐시에 남은 단 하나의 무효
+    마켓 코드가 배치 전체를 404 "Code not found"로 실패시킨다 — 42시간
+    동안 신규 진입 스캔이 전부 막혔던 실제 장애(2026-09-08~09-10, 505회
+    연속 실패)의 원인. 컨테이너 재시작으로 마켓 목록이 새로 로드되면서
+    우연히 해소됐을 뿐, 코드 차원의 근본 수정은 아니었다.
+
+    따라서 get_liquid_symbols()는 매 호출마다 마켓 목록을 강제로 새로
+    불러와야 한다(get_top_symbols_by_volume()과 달리 — 그쪽은 라이브
+    엔진이 10분마다 호출하는 별도 경로라 이 수정의 영향을 받지 않는다).
+    """
+
+    def _setup(self, mock_ccxt_upbit: MagicMock, tickers: dict) -> None:
+        mock_ccxt_upbit.markets = {sym: {} for sym in tickers}
+        mock_ccxt_upbit.fetch_tickers.return_value = tickers
+
+    def test_forces_fresh_market_reload_every_call(
+        self, upbit_client: UpbitClient, mock_ccxt_upbit: MagicMock
+    ) -> None:
+        """
+        self._exchange.markets가 이미 채워져 있어도(캐시된 상태) 매 호출마다
+        load_markets(reload=True)를 호출해 상장폐지된 마켓 코드가 캐시에
+        남아있지 않도록 강제해야 한다.
+        """
+        self._setup(mock_ccxt_upbit, {"BTC/KRW": {"quoteVolume": 100_000_000_000}})
+
+        upbit_client.get_liquid_symbols(min_quote_volume_krw=1_000_000_000)
+
+        mock_ccxt_upbit.load_markets.assert_called_once_with(reload=True)
+
+    def test_returns_symbols_at_or_above_threshold_sorted_desc(
+        self, upbit_client: UpbitClient, mock_ccxt_upbit: MagicMock
+    ) -> None:
+        self._setup(
+            mock_ccxt_upbit,
+            {
+                "BTC/KRW": {"quoteVolume": 200_000_000_000},
+                "ETH/KRW": {"quoteVolume": 150_000_000_000},
+                "LOW/KRW": {"quoteVolume": 1_000_000_000},
+            },
+        )
+        result = upbit_client.get_liquid_symbols(min_quote_volume_krw=10_000_000_000)
+        assert result == ["BTC/KRW", "ETH/KRW"]
