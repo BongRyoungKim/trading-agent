@@ -191,3 +191,16 @@ class TestParameterPassthrough:
         # MeanReversionStrategy stores hours in _no_entry_hours_utc
         assert hasattr(s._mean_reversion, "_no_entry_hours_utc")
         assert 0 in s._mean_reversion._no_entry_hours_utc
+
+    def test_mr_sma_period_default_is_zero_disabled(self):
+        # Backward compatibility: no mr_sma_period arg → long-term trend
+        # filter stays fully disabled, identical to pre-existing behaviour.
+        s = _make_strategy()
+        mr_params = s.get_parameters()["mean_reversion"]
+        assert mr_params["sma_period"] == 0
+
+    def test_mr_sma_period_and_floor_passed_to_sub_strategy(self):
+        s = _make_strategy(mr_sma_period=199, mr_sma_floor=0.955)
+        mr_params = s.get_parameters()["mean_reversion"]
+        assert mr_params["sma_period"] == 199
+        assert mr_params["sma_floor"] == 0.955

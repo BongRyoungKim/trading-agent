@@ -94,6 +94,15 @@ class PositionLimitExceededError(RiskError):
     """Raised when attempting to open more positions than the configured limit."""
 
 
+class TradingCooldownError(RiskError):
+    """
+    Raised when new entries are temporarily paused by the consecutive-loss
+    circuit breaker. Unlike other RiskError subclasses this is not an
+    operational violation — it is an expected, self-clearing pause that ends
+    once the cooldown window elapses.
+    """
+
+
 # ── Backtest ───────────────────────────────────────────────────────────────────
 
 class BacktestError(TradingAgentError):

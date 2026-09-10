@@ -24,6 +24,8 @@ DEFAULT_STRATEGY_PARAMS = {
     "mr_rsi_oversold_slow": 30.0,
     "mr_rsi_exit": 55.0,
     "mr_no_entry_hours_utc": [17, 18, 19, 20],
+    "mr_sma_period": 0,      # 0 = long-term trend filter disabled (backward compatible)
+    "mr_sma_floor": 0.85,
     "sm_vol_mult": 1.5,
     "sm_adx_threshold": 28.0,
 }
@@ -32,6 +34,8 @@ DEFAULT_RISK = {
     "sl_ceiling_pct": 1.5,
     "atr_multiplier": 2.0,
     "tp_rr_multiplier": 1.5,
+    "consecutive_loss_limit": 3,             # 0 = circuit breaker disabled
+    "consecutive_loss_cooldown_minutes": 720,  # 12h
 }
 
 
@@ -50,6 +54,8 @@ def main() -> None:
         f"--sl-ceiling-pct {risk['sl_ceiling_pct']}",
         f"--atr-multiplier {risk['atr_multiplier']}",
         f"--tp-rr-multiplier {risk['tp_rr_multiplier']}",
+        f"--consecutive-loss-limit {risk['consecutive_loss_limit']}",
+        f"--consecutive-loss-cooldown-min {risk['consecutive_loss_cooldown_minutes']}",
     ]
     print(" ".join(parts))
 

@@ -5,9 +5,11 @@ from decimal import Decimal
 
 import pytest
 
+from datetime import UTC, datetime, timedelta
+
 from src.risk.manager import PortfolioState, RiskManager
 from src.risk.position_sizing import fixed_fraction, kelly_criterion, percent_of_equity
-from src.utils.exceptions import MaxDrawdownExceededError, PositionLimitExceededError
+from src.utils.exceptions import MaxDrawdownExceededError, PositionLimitExceededError, TradingCooldownError
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -121,6 +123,33 @@ class TestPortfolioState:
         state.record_trade_result(Decimal("-200"))
         assert state.capital == Decimal("9800")
         assert state.daily_loss == Decimal("200")
+
+
+class TestPortfolioStateConsecutiveLosses:
+    def test_starts_at_zero_no_cooldown(self) -> None:
+        state = _make_portfolio()
+        assert state.consecutive_losses == 0
+        assert state.cooldown_until is None
+
+    def test_loss_increments_counter(self) -> None:
+        state = _make_portfolio()
+        state.record_trade_result(Decimal("-100"))
+        assert state.consecutive_losses == 1
+        state.record_trade_result(Decimal("-50"))
+        assert state.consecutive_losses == 2
+
+    def test_win_resets_counter(self) -> None:
+        state = _make_portfolio()
+        state.record_trade_result(Decimal("-100"))
+        state.record_trade_result(Decimal("50"))
+        assert state.consecutive_losses == 0
+
+    def test_zero_pnl_resets_counter(self) -> None:
+        # pnl == 0 is not a loss (matches daily_loss's strict "pnl < 0" rule)
+        state = _make_portfolio()
+        state.record_trade_result(Decimal("-100"))
+        state.record_trade_result(Decimal("0"))
+        assert state.consecutive_losses == 0
 
 
 # ── RiskManager ───────────────────────────────────────────────────────────────
@@ -247,3 +276,91 @@ class TestRiskManagerCallbacks:
         rm = RiskManager(settings, state)
         rm.on_position_closed(Decimal("0"))
         assert state.open_positions == 0
+
+
+# ── Consecutive-loss circuit breaker ──────────────────────────────────────────
+# Constructor-level defaults (not Settings-based) so a bare MagicMock() Settings
+# object used elsewhere in the test suite never needs updating — see
+# RiskManager.__init__ for rationale.
+
+class TestRiskManagerCircuitBreakerDefaults:
+    def test_default_limit_is_three(self) -> None:
+        rm = RiskManager(_make_settings(), _make_portfolio())
+        assert rm.consecutive_loss_limit == 3
+
+    def test_default_cooldown_is_720_minutes(self) -> None:
+        rm = RiskManager(_make_settings(), _make_portfolio())
+        assert rm.consecutive_loss_cooldown_minutes == 720
+
+    def test_properties_are_settable(self) -> None:
+        rm = RiskManager(_make_settings(), _make_portfolio())
+        rm.consecutive_loss_limit = 5
+        rm.consecutive_loss_cooldown_minutes = 30
+        assert rm.consecutive_loss_limit == 5
+        assert rm.consecutive_loss_cooldown_minutes == 30
+
+
+class TestRiskManagerCircuitBreakerBehavior:
+    def test_does_not_block_below_limit(self) -> None:
+        settings = _make_settings()
+        state = _make_portfolio()
+        rm = RiskManager(settings, state, consecutive_loss_limit=3)
+        rm.on_position_closed(Decimal("-100"))
+        rm.on_position_closed(Decimal("-100"))
+        rm.check_can_open_position()  # 2 losses < limit 3 → should not raise
+
+    def test_blocks_at_limit(self) -> None:
+        settings = _make_settings()
+        state = _make_portfolio()
+        rm = RiskManager(
+            settings, state, consecutive_loss_limit=3, consecutive_loss_cooldown_minutes=60
+        )
+        for _ in range(3):
+            rm.on_position_closed(Decimal("-100"))
+        with pytest.raises(TradingCooldownError):
+            rm.check_can_open_position()
+
+    def test_win_between_losses_resets_and_avoids_cooldown(self) -> None:
+        settings = _make_settings()
+        state = _make_portfolio()
+        rm = RiskManager(settings, state, consecutive_loss_limit=3)
+        rm.on_position_closed(Decimal("-100"))
+        rm.on_position_closed(Decimal("-100"))
+        rm.on_position_closed(Decimal("50"))   # win resets streak
+        rm.on_position_closed(Decimal("-100"))  # only 1 consecutive loss now
+        rm.check_can_open_position()  # should not raise
+
+    def test_cooldown_expires_after_window_elapses(self) -> None:
+        settings = _make_settings()
+        state = _make_portfolio()
+        rm = RiskManager(
+            settings, state, consecutive_loss_limit=2, consecutive_loss_cooldown_minutes=10
+        )
+        rm.on_position_closed(Decimal("-100"))
+        rm.on_position_closed(Decimal("-100"))
+        with pytest.raises(TradingCooldownError):
+            rm.check_can_open_position()
+        # Simulate time passing beyond the cooldown window.
+        state.cooldown_until = datetime.now(UTC) - timedelta(minutes=1)
+        rm.check_can_open_position()  # cooldown expired → should not raise
+        assert state.cooldown_until is None
+
+    def test_disabled_when_limit_is_zero(self) -> None:
+        # Small loss amounts so the (unrelated, pre-existing) daily-loss limit
+        # doesn't fire first and mask what this test is actually checking.
+        settings = _make_settings()
+        state = _make_portfolio()
+        rm = RiskManager(settings, state, consecutive_loss_limit=0)
+        for _ in range(5):
+            rm.on_position_closed(Decimal("-10"))
+        rm.check_can_open_position()  # circuit breaker disabled → never raises
+
+    def test_backward_compatible_default_construction_never_raises_without_losses(self) -> None:
+        # Existing call sites across the codebase construct RiskManager(settings,
+        # state) with no extra args and never trigger 3 consecutive losses in a
+        # single test — this must keep behaving exactly as before.
+        settings = _make_settings()
+        state = _make_portfolio()
+        rm = RiskManager(settings, state)
+        rm.on_position_closed(Decimal("300"))
+        rm.check_can_open_position()  # should not raise

@@ -203,6 +203,38 @@ class TestFullTradingLoop:
         eng.tick("ETH/USDT")
         assert not port.has_position("ETH/USDT")
 
+    def test_consecutive_loss_circuit_breaker_blocks_next_entry(
+        self, settings, exchange, strategy, telegram
+    ):
+        """After a losing streak reaches the configured limit, the next BUY
+        signal is blocked until the cooldown window elapses."""
+        port = PortfolioTracker(initial_cash=Decimal("20000"))
+        state = PortfolioState(capital=Decimal("20000"), peak_capital=Decimal("20000"))
+        rm = RiskManager(
+            settings, state, consecutive_loss_limit=1, consecutive_loss_cooldown_minutes=60
+        )
+        eng = TradingEngine(settings, exchange, strategy, rm, port, telegram)
+
+        # Open a position.
+        exchange.get_ohlcv_dataframe.return_value = _make_buy_df()
+        exchange.get_ticker.return_value = _make_ticker(60000.0)
+        eng.tick("BTC/USDT")
+        assert port.has_position("BTC/USDT")
+
+        # Price crashes well below the stop-loss → closed at a loss, and with
+        # consecutive_loss_limit=1 this single loss should trip the breaker.
+        exchange.get_ticker.return_value = _make_ticker(40000.0)
+        eng.tick("BTC/USDT")
+        assert not port.has_position("BTC/USDT")
+        assert state.consecutive_losses >= 1
+        assert state.cooldown_until is not None
+
+        # A fresh BUY signal should now be blocked by the cooldown.
+        exchange.get_ohlcv_dataframe.return_value = _make_buy_df()
+        exchange.get_ticker.return_value = _make_ticker(60000.0)
+        eng.tick("BTC/USDT")
+        assert not port.has_position("BTC/USDT")
+
     def test_tick_error_does_not_crash_engine(self, engine, exchange):
         """Exchange error inside tick is caught; engine remains operational."""
         exchange.get_ohlcv_dataframe.side_effect = RuntimeError("network error")

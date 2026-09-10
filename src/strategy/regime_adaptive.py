@@ -44,6 +44,11 @@ class RegimeAdaptiveStrategy(BaseStrategy):
         mr_rsi_oversold_slow:  MeanReversion 중기 RSI 과매도 기준 (기본 30.0).
         mr_rsi_exit:           MeanReversion RSI 청산 기준 (기본 60.0).
         mr_no_entry_hours_utc: MeanReversion 진입 차단 UTC 시간대 목록.
+        mr_sma_period:         MeanReversion 장기추세 필터 SMA 기간 (기본 0=비활성).
+                                그라인딩 하락장(완만하지만 지속적인 하락) 회피용 —
+                                가격이 SMA×mr_sma_floor 아래로 이격되면 진입 차단.
+        mr_sma_floor:          장기추세 필터 이격 허용 배수 (기본 0.85).
+                                mr_sma_period=0이면 사용되지 않음.
         sm_vol_mult:           SwingMomentum 거래량 배수 (기본 1.5).
         sm_adx_threshold:      SwingMomentum 내부 추세 강도 기준 (기본 28.0).
     """
@@ -59,6 +64,8 @@ class RegimeAdaptiveStrategy(BaseStrategy):
         mr_rsi_oversold_slow: float = 30.0,
         mr_rsi_exit: float = 55.0,
         mr_no_entry_hours_utc: list | None = None,
+        mr_sma_period: int = 0,
+        mr_sma_floor: float = 0.85,
         sm_vol_mult: float = 1.5,
         sm_adx_threshold: float = 28.0,
     ) -> None:
@@ -79,6 +86,8 @@ class RegimeAdaptiveStrategy(BaseStrategy):
             rsi_oversold_slow=mr_rsi_oversold_slow,
             rsi_exit=mr_rsi_exit,
             no_entry_hours_utc=mr_no_entry_hours_utc,
+            sma_period=mr_sma_period,
+            sma_floor=mr_sma_floor,
         )
         self._swing_momentum = SwingMomentumStrategy(
             symbol=symbol,

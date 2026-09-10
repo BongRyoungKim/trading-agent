@@ -5,13 +5,17 @@ Acts as a hard gate — trading engine must call check_* methods before executio
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from loguru import logger
 
 from src.config.settings import Settings
-from src.utils.exceptions import MaxDrawdownExceededError, PositionLimitExceededError
+from src.utils.exceptions import (
+    MaxDrawdownExceededError,
+    PositionLimitExceededError,
+    TradingCooldownError,
+)
 
 
 @dataclass
@@ -25,6 +29,8 @@ class PortfolioState:
     open_positions: int = 0
     daily_loss: Decimal = Decimal("0")
     last_reset_date: datetime = field(default_factory=lambda: datetime.now(UTC))
+    consecutive_losses: int = 0
+    cooldown_until: datetime | None = None
 
     @property
     def current_drawdown_pct(self) -> float:
@@ -37,11 +43,17 @@ class PortfolioState:
             self.peak_capital = self.capital
 
     def record_trade_result(self, pnl: Decimal) -> None:
-        """Update capital and daily loss after a trade closes."""
+        """Update capital, daily loss, and the consecutive-loss streak after
+        a trade closes. A strictly negative pnl extends the loss streak; a
+        zero or positive pnl resets it (mirrors the existing `pnl < 0` rule
+        used for daily_loss)."""
         self.capital += pnl
         self.update_peak()
         if pnl < 0:
             self.daily_loss += abs(pnl)
+            self.consecutive_losses += 1
+        else:
+            self.consecutive_losses = 0
 
     def reset_daily_loss_if_new_day(self) -> None:
         today = datetime.now(UTC).date()
@@ -62,11 +74,49 @@ class RiskManager:
 
         # After a trade closes:
         risk.on_trade_closed(pnl)
+
+    Consecutive-loss circuit breaker:
+        `consecutive_loss_limit`/`consecutive_loss_cooldown_minutes` are
+        constructor args (not Settings fields) so they follow the same
+        live-tunable-knob pattern as TradingEngine's sl_ceiling_pct etc. —
+        settable via properties after construction, wired from CLI args /
+        `.strategy_params.json` in src/main.py. Keeping them off `Settings`
+        also avoids a MagicMock-settings footgun in tests elsewhere in the
+        suite that build `RiskManager` with a bare `MagicMock()` and never
+        set unrelated risk fields explicitly.
     """
 
-    def __init__(self, settings: Settings, state: PortfolioState) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        state: PortfolioState,
+        consecutive_loss_limit: int = 3,
+        consecutive_loss_cooldown_minutes: int = 720,
+    ) -> None:
         self._settings = settings
         self._state = state
+        self._consecutive_loss_limit = consecutive_loss_limit
+        self._consecutive_loss_cooldown_minutes = consecutive_loss_cooldown_minutes
+
+    # ── Consecutive-loss circuit breaker config ──────────────────────────────
+
+    @property
+    def consecutive_loss_limit(self) -> int:
+        """Consecutive net-losing trades that trigger a cooldown. 0 disables it."""
+        return self._consecutive_loss_limit
+
+    @consecutive_loss_limit.setter
+    def consecutive_loss_limit(self, value: int) -> None:
+        self._consecutive_loss_limit = value
+
+    @property
+    def consecutive_loss_cooldown_minutes(self) -> int:
+        """Minutes new entries stay blocked once the loss streak hits the limit."""
+        return self._consecutive_loss_cooldown_minutes
+
+    @consecutive_loss_cooldown_minutes.setter
+    def consecutive_loss_cooldown_minutes(self, value: int) -> None:
+        self._consecutive_loss_cooldown_minutes = value
 
     # ── Checks (raise on violation) ──────────────────────────────────────────
 
@@ -121,6 +171,32 @@ class RiskManager:
                 },
             )
 
+    def check_cooldown(self) -> None:
+        """
+        Raise TradingCooldownError if a consecutive-loss cooldown is active.
+
+        Unlike the other check_* methods this is not a hard violation of a
+        risk limit — it is a temporary, self-clearing pause after a losing
+        streak. Once the cooldown window has elapsed this clears
+        `cooldown_until` and stops raising.
+        """
+        cooldown_until = self._state.cooldown_until
+        if cooldown_until is None:
+            return
+        now = datetime.now(UTC)
+        if now < cooldown_until:
+            remaining_min = (cooldown_until - now).total_seconds() / 60
+            raise TradingCooldownError(
+                f"Circuit breaker active: {self._state.consecutive_losses} consecutive "
+                f"losses, {remaining_min:.0f} more minutes until entries resume",
+                details={
+                    "consecutive_losses": self._state.consecutive_losses,
+                    "cooldown_until": cooldown_until.isoformat(),
+                    "remaining_minutes": round(remaining_min, 1),
+                },
+            )
+        self._state.cooldown_until = None
+
     def check_can_open_position(self) -> None:
         """
         Run all pre-trade checks. Raises on first violation.
@@ -129,6 +205,7 @@ class RiskManager:
         self.check_drawdown()
         self.check_daily_loss()
         self.check_position_limit()
+        self.check_cooldown()
         logger.debug(
             "Risk checks passed",
             open_positions=self._state.open_positions,
@@ -144,6 +221,21 @@ class RiskManager:
     def on_position_closed(self, pnl: Decimal) -> None:
         self._state.open_positions = max(0, self._state.open_positions - 1)
         self._state.record_trade_result(pnl)
+
+        if (
+            self._consecutive_loss_limit > 0
+            and self._state.consecutive_losses >= self._consecutive_loss_limit
+            and self._state.cooldown_until is None
+        ):
+            self._state.cooldown_until = datetime.now(UTC) + timedelta(
+                minutes=self._consecutive_loss_cooldown_minutes
+            )
+            logger.warning(
+                "Consecutive-loss circuit breaker triggered — new entries paused",
+                consecutive_losses=self._state.consecutive_losses,
+                cooldown_until=self._state.cooldown_until.isoformat(),
+            )
+
         logger.info(
             "Position closed",
             pnl=float(pnl),

@@ -27,7 +27,7 @@ from src.data.validator import OHLCVValidator
 from src.exchange.slippage import SlippageConfig, apply_slippage
 from src.health import get_health_state
 from src.utils.circuit_breaker import CircuitBreaker
-from src.utils.exceptions import CircuitBreakerOpenError, ConnectionError, InsufficientFundsError, PositionLimitExceededError, RiskError
+from src.utils.exceptions import CircuitBreakerOpenError, ConnectionError, InsufficientFundsError, PositionLimitExceededError, RiskError, TradingCooldownError
 from src.utils.market_hours import MarketHoursConfig, market_hours_from_settings
 from src.utils.telegram import TelegramClient
 
@@ -762,6 +762,15 @@ class TradingEngine:
                 "Position limit active — buy skipped",
                 symbol=symbol,
                 open_positions=self._risk_manager._state.open_positions,  # noqa: SLF001
+            )
+            return
+        except TradingCooldownError:
+            # Also normal/expected — consecutive-loss circuit breaker cooldown
+            # is a temporary, self-clearing pause, not an error condition.
+            logger.debug(
+                "Consecutive-loss cooldown active — buy skipped",
+                symbol=symbol,
+                consecutive_losses=self._risk_manager._state.consecutive_losses,  # noqa: SLF001
             )
             return
         except RiskError as exc:

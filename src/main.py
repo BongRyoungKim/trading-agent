@@ -226,6 +226,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Take-profit distance as a multiple of the SL distance (default: 1.5).",
     )
     p.add_argument(
+        "--consecutive-loss-limit",
+        type=int,
+        default=3,
+        dest="consecutive_loss_limit",
+        help="Consecutive net-losing trades that pause new entries (default: 3, 0=disabled).",
+    )
+    p.add_argument(
+        "--consecutive-loss-cooldown-min",
+        type=int,
+        default=720,
+        dest="consecutive_loss_cooldown_min",
+        help="Minutes new entries stay paused after the loss-streak limit is hit (default: 720 = 12h).",
+    )
+    p.add_argument(
         "--weekly-report-day",
         default="mon",
         dest="weekly_report_day",
@@ -389,6 +403,8 @@ def main() -> None:
             risk_capital=float(risk_capital),
         )
     risk_manager = RiskManager(settings, risk_state)
+    risk_manager.consecutive_loss_limit = args.consecutive_loss_limit
+    risk_manager.consecutive_loss_cooldown_minutes = args.consecutive_loss_cooldown_min
 
     if args.symbol_strategies:
         from src.strategy.symbol_router import SymbolStrategyRouter
