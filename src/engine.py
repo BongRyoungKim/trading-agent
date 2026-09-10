@@ -19,6 +19,7 @@ from src.exchange.base import BaseExchangeClient
 from src.portfolio.journal import TradeJournal, TradeRecord
 from src.portfolio.journal_store import SQLiteJournalStore
 from src.portfolio.tracker import PortfolioTracker
+from src.risk.exit_rules import clamp_stop_loss_and_size_take_profit, evaluate_open_position_exit, is_signal_exit_allowed
 from src.risk.manager import RiskManager
 from src.risk.position_sizing import fixed_fraction
 from src.strategy.base import BaseStrategy, StrategyFactory
@@ -259,15 +260,26 @@ class TradingEngine:
         if pos.side == "buy" and (pos.highest_price is None or price > pos.highest_price):
             pos = self._portfolio.update_highest_price(symbol, price)
 
-        # ── trailing stop ratchet ──────────────────────────────────────────
+        # ── SL/TP/trailing/time-stop: delegated to the shared exit-rule
+        # module (src/risk/exit_rules.py) so live and backtest can never
+        # structurally diverge. Trailing/SL/TP/time-stop check order and
+        # arithmetic are unchanged from before this extraction.
         trailing_pct = pos.trailing_stop_pct if pos.trailing_stop_pct is not None \
             else self._trailing_stop_pct
-        if trailing_pct is not None and pos.side == "buy":
-            new_trail = price * (Decimal("1") - trailing_pct / Decimal("100"))
-            if pos.stop_loss is None or new_trail > pos.stop_loss:
-                pos = self._portfolio.update_stop_loss(symbol, new_trail)
+        hold_min = (datetime.now(UTC) - pos.entry_time).total_seconds() / 60
+        decision = evaluate_open_position_exit(
+            entry_price=pos.entry_price,
+            hold_minutes=hold_min,
+            current_price=price,
+            stop_loss=pos.stop_loss,
+            take_profit=pos.take_profit,
+            trailing_stop_pct=trailing_pct,
+            side=pos.side,
+        )
+        if decision.updated_stop_loss != pos.stop_loss:
+            pos = self._portfolio.update_stop_loss(symbol, decision.updated_stop_loss)
 
-        if pos.stop_loss is not None and price <= pos.stop_loss:
+        if decision.reason == "stop_loss":
             logger.info(
                 "Stop-loss triggered",
                 symbol=symbol,
@@ -278,7 +290,7 @@ class TradingEngine:
             self._notify_close(symbol, price, reason="stop_loss")
             return True
 
-        if pos.take_profit is not None and price >= pos.take_profit:
+        if decision.reason == "take_profit":
             logger.info(
                 "Take-profit triggered",
                 symbol=symbol,
@@ -289,10 +301,7 @@ class TradingEngine:
             self._notify_close(symbol, price, reason="take_profit")
             return True
 
-        # ── time-based stop — cut losers after 60 min at -0.5% ────────────
-        # Widened from 45 min / -0.3% to match the wider 1.5% SL regime.
-        hold_min = (datetime.now(UTC) - pos.entry_time).total_seconds() / 60
-        if hold_min >= 60 and price < pos.entry_price * Decimal("0.995"):
+        if decision.reason == "time_stop":
             logger.info(
                 "Time-stop triggered — position losing after 45 min",
                 symbol=symbol,
@@ -682,7 +691,11 @@ class TradingEngine:
         elif signal_.action == SignalAction.SELL and has_pos:
             pos = self._portfolio.get_position(symbol)
             hold_seconds = (datetime.now(UTC) - pos.entry_time).total_seconds()
-            if hold_seconds < 1800:  # 30 min minimum hold
+            # Min-hold + min-profit gate delegated to the shared exit-rule
+            # module (src/risk/exit_rules.py); called once per sub-condition
+            # (with the other input at a value that trivially passes) so the
+            # two distinct debug log messages are preserved unchanged.
+            if not is_signal_exit_allowed(hold_seconds, None):  # 30 min minimum hold
                 logger.debug(
                     "Signal SELL suppressed — min hold time not reached",
                     symbol=symbol,
@@ -693,7 +706,7 @@ class TradingEngine:
             current_price = signal_.metadata.get("price") if signal_.metadata else None
             if current_price is not None:
                 unrealized_pct = (float(current_price) - float(pos.entry_price)) / float(pos.entry_price) * 100
-                if unrealized_pct < 0.3:
+                if not is_signal_exit_allowed(hold_seconds, unrealized_pct):
                     logger.debug(
                         "Signal SELL suppressed — below min profit threshold",
                         symbol=symbol,
@@ -716,22 +729,21 @@ class TradingEngine:
         # src.config.live_params) — auto-adjusted by ScheduledTaskRunner and
         # picked up on the next process restart.
         atr_val = signal_.metadata.get("atr") if signal_ and signal_.metadata else None
-        stop_loss = self._risk_manager.calculate_stop_loss(
+        raw_stop_loss = self._risk_manager.calculate_stop_loss(
             price, side="buy",
             atr_value=float(atr_val) if atr_val else None,
             atr_multiplier=self._atr_multiplier,
         )
-        sl_ceiling = price * (Decimal("1") - self._sl_ceiling_pct / Decimal("100"))
-        sl_floor   = price * (Decimal("1") - self._sl_floor_pct / Decimal("100"))
-        if stop_loss > sl_ceiling:
-            stop_loss = sl_ceiling
-        if stop_loss < sl_floor:
-            stop_loss = sl_floor
-        # Take profit: tp_rr_multiplier × SL distance.
-        # Trailing stop locks profits once price moves toward TP.
-        sl_distance = price - stop_loss
-        tp_distance = sl_distance * self._tp_rr_multiplier
-        take_profit = price + tp_distance
+        # Clamp + take-profit sizing delegated to the shared exit-rule module
+        # (src/risk/exit_rules.py) — trailing stop locks profits once price
+        # moves toward TP.
+        stop_loss, take_profit = clamp_stop_loss_and_size_take_profit(
+            entry_price=price,
+            raw_stop_loss=raw_stop_loss,
+            sl_ceiling_pct=self._sl_ceiling_pct,
+            sl_floor_pct=self._sl_floor_pct,
+            tp_rr_multiplier=self._tp_rr_multiplier,
+        )
 
         amount = fixed_fraction(
             capital=self._portfolio.cash,

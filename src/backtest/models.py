@@ -21,6 +21,7 @@ class Trade:
     entry_time: datetime
     exit_time: datetime
     commission: Decimal                # total commission paid (entry + exit)
+    exit_reason: str | None = None     # "stop_loss" | "take_profit" | "time_stop" | "signal" | None
 
     @property
     def pnl(self) -> Decimal:
