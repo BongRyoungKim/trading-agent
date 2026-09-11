@@ -53,6 +53,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "mr_rsi_oversold_fast": 20.0,
         "mr_rsi_oversold_slow": 30.0,
         "mr_rsi_exit": 55.0,
+        "mr_rsi_exit_fast": 70.0,
         "mr_no_entry_hours_utc": [17, 18, 19, 20],
         "sm_vol_mult": 1.5,
         "sm_adx_threshold": 28.0,
@@ -77,6 +78,10 @@ PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "mr_rsi_oversold_fast": (10.0, 30.0),
     "mr_rsi_oversold_slow": (20.0, 40.0),
     "mr_rsi_exit":          (45.0, 65.0),
+    # 하한 60.0: mr_rsi_oversold_slow(38.0)보다 명확히 높게 유지하고 현재 라이브값
+    # (70.0)보다 낮은 값으로의 급격한 축소를 방지. 상한 85.0: RSI5가 85를 넘는
+    # 경우는 극단적 과매수라 사실상 SELL 신호를 죽이는 것과 같아 안전 상한으로 설정.
+    "mr_rsi_exit_fast":     (60.0, 85.0),
     "sm_vol_mult":          (0.3, 3.0),
     "sm_adx_threshold":     (20.0, 35.0),
     "sl_floor_pct":         (2.0, 4.0),

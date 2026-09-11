@@ -43,6 +43,7 @@ class RegimeAdaptiveStrategy(BaseStrategy):
         mr_rsi_oversold_fast:  MeanReversion 단기 RSI 과매도 기준 (기본 20.0).
         mr_rsi_oversold_slow:  MeanReversion 중기 RSI 과매도 기준 (기본 30.0).
         mr_rsi_exit:           MeanReversion RSI 청산 기준 (기본 60.0).
+        mr_rsi_exit_fast:      MeanReversion 단기 RSI(rsi_fast) 청산 기준 (기본 70.0).
         mr_no_entry_hours_utc: MeanReversion 진입 차단 UTC 시간대 목록.
         mr_sma_period:         MeanReversion 장기추세 필터 SMA 기간 (기본 0=비활성).
                                 그라인딩 하락장(완만하지만 지속적인 하락) 회피용 —
@@ -63,6 +64,7 @@ class RegimeAdaptiveStrategy(BaseStrategy):
         mr_rsi_oversold_fast: float = 20.0,
         mr_rsi_oversold_slow: float = 30.0,
         mr_rsi_exit: float = 55.0,
+        mr_rsi_exit_fast: float = 70.0,
         mr_no_entry_hours_utc: list | None = None,
         mr_sma_period: int = 0,
         mr_sma_floor: float = 0.85,
@@ -85,6 +87,7 @@ class RegimeAdaptiveStrategy(BaseStrategy):
             rsi_oversold_fast=mr_rsi_oversold_fast,
             rsi_oversold_slow=mr_rsi_oversold_slow,
             rsi_exit=mr_rsi_exit,
+            rsi_exit_fast=mr_rsi_exit_fast,
             no_entry_hours_utc=mr_no_entry_hours_utc,
             sma_period=mr_sma_period,
             sma_floor=mr_sma_floor,

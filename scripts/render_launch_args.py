@@ -23,6 +23,7 @@ DEFAULT_STRATEGY_PARAMS = {
     "mr_rsi_oversold_fast": 20.0,
     "mr_rsi_oversold_slow": 30.0,
     "mr_rsi_exit": 55.0,
+    "mr_rsi_exit_fast": 70.0,
     "mr_no_entry_hours_utc": [17, 18, 19, 20],
     "mr_sma_period": 0,      # 0 = long-term trend filter disabled (backward compatible)
     "mr_sma_floor": 0.85,

@@ -185,6 +185,11 @@ class TestParameterPassthrough:
         assert sm_params["vol_mult"] == 2.0
         assert sm_params["adx_threshold"] == 30.0
 
+    def test_mr_rsi_exit_fast_passed_through(self):
+        s = _make_strategy(mr_rsi_exit_fast=78.0)
+        mr_params = s.get_parameters()["mean_reversion"]
+        assert mr_params["rsi_exit_fast"] == 78.0
+
     def test_no_entry_hours_passed_to_mr(self):
         s = _make_strategy(mr_no_entry_hours_utc=[0, 1, 2])
         # Verify sub-strategy holds the setting (via regime→MR delegation)
