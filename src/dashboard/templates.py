@@ -643,16 +643,37 @@ function renderBalance(items) {{
   const fmtKRW = v => '₩' + Math.round(v).toLocaleString('ko-KR');
   const fmtQty = v => parseFloat(v.toFixed(8)).toString();
   const fmtPrice = v => v >= 1 ? fmtKRW(v) : '₩' + v.toFixed(6);
+  // 수익/본전/손해/정보없음 카드 스타일 (Python _balance_card_style()과 임계값·색상 동일하게 유지)
+  const cardStyle = (avgBuy, price) => {{
+    if (avgBuy <= 0) return {{border: '#334155', bg: '#0f172a', icon: '', iconColor: '#64748b'}};
+    const pnlPct = (price / avgBuy - 1) * 100;
+    if (pnlPct > 0.1) return {{border: '#10b981', bg: 'rgba(16,185,129,0.10)', icon: '▲', iconColor: '#10b981'}};
+    if (pnlPct < -0.1) return {{border: '#ef4444', bg: 'rgba(239,68,68,0.10)', icon: '▼', iconColor: '#ef4444'}};
+    return {{border: '#f59e0b', bg: 'rgba(245,158,11,0.08)', icon: '－', iconColor: '#f59e0b'}};
+  }};
   const cards = items.map(b => {{
     const avgBuy = b.avg_buy_price || 0;
+    const style = cardStyle(avgBuy, b.price || 0);
+    const iconHtml = style.icon
+      ? `<span style="color:${{style.iconColor}};font-size:.75rem;margin-right:.35rem">${{style.icon}}</span>` : '';
     const usedRow = b.used > 0
       ? `<div style="display:flex;justify-content:space-between;margin:.25rem 0">
            <span style="color:#64748b;font-size:.75rem">주문중</span>
            <span style="color:#64748b;font-size:.75rem">${{fmtQty(b.used)}}</span>
          </div>` : '';
-    return `<div style="background:#0f172a;border:1px solid #334155;border-radius:.6rem;padding:.9rem">
+    let pnlHtml = '';
+    if (avgBuy > 0) {{
+      const pnlKrw = (b.eval_amount || 0) - (b.buy_amount || 0);
+      const pnlPct = ((b.price || 0) / avgBuy - 1) * 100;
+      const pnlSign = pnlKrw >= 0 ? '+' : '-';
+      pnlHtml = `<div style="display:flex;justify-content:space-between;margin:.25rem 0">
+        <span style="color:#64748b;font-size:.78rem">평가손익</span>
+        <span style="color:${{style.border}};font-weight:700;font-size:.82rem">${{pnlSign}}${{fmtKRW(Math.abs(pnlKrw))}} (${{pnlSign}}${{Math.abs(pnlPct).toFixed(2)}}%)</span>
+      </div>`;
+    }}
+    return `<div style="background:${{style.bg}};border:1px solid ${{style.border}};border-left:3px solid ${{style.border}};border-radius:.6rem;padding:.9rem">
       <div style="font-size:1rem;font-weight:800;color:#f1f5f9;margin-bottom:.65rem;display:flex;justify-content:space-between;align-items:baseline">
-        <span>${{b.currency}}</span>
+        <span>${{iconHtml}}${{b.currency}}</span>
         <span style="font-size:.7rem;font-weight:400;color:#64748b">${{fmtQty(b.free)}}</span>
       </div>
       ${{usedRow}}
@@ -673,6 +694,7 @@ function renderBalance(items) {{
         <span style="color:#64748b;font-size:.78rem">평가금액</span>
         <span style="color:#10b981;font-weight:700;font-size:.88rem">${{fmtKRW(b.eval_amount || 0)}}</span>
       </div>
+      ${{pnlHtml}}
     </div>`;
   }});
   const total = items.reduce((s, b) => s + (b.eval_amount || 0), 0);
@@ -1357,6 +1379,22 @@ def _render_ticks(ticks: list[dict]) -> str:
     return f'<div id="tick-panel-0" class="tick-panel">{rows_html}</div>'
 
 
+def _balance_card_style(avg_buy_price: float, price: float) -> tuple[str, str, str, str]:
+    """코인 카드의 수익/본전/손해/정보없음 상태에 따른 스타일을 산출한다.
+
+    avg_buy_price가 없으면(매수이력 없음) 손익 계산이 불가능하므로 중립으로 처리한다.
+    Returns: (border_color, bg_tint, icon, icon_color)
+    """
+    if avg_buy_price <= 0:
+        return "#334155", "#0f172a", "", "#64748b"
+    pnl_pct = (price / avg_buy_price - 1) * 100
+    if pnl_pct > 0.1:
+        return "#10b981", "rgba(16,185,129,0.10)", "▲", "#10b981"
+    if pnl_pct < -0.1:
+        return "#ef4444", "rgba(239,68,68,0.10)", "▼", "#ef4444"
+    return "#f59e0b", "rgba(245,158,11,0.08)", "－", "#f59e0b"
+
+
 def _render_balance(balance: list[dict]) -> str:
     if not balance:
         return '<p class="empty">잔고 없음</p>'
@@ -1371,6 +1409,12 @@ def _render_balance(balance: list[dict]) -> str:
         avg_buy_price = b.get("avg_buy_price", 0.0)
         buy_amount = b.get("buy_amount", 0)
 
+        border_color, bg_tint, pnl_icon, icon_color = _balance_card_style(avg_buy_price, price)
+        icon_html = (
+            f'<span style="color:{icon_color};font-size:.75rem;margin-right:.35rem">{pnl_icon}</span>'
+            if pnl_icon else ""
+        )
+
         fmt_qty = f"{free:.8f}".rstrip("0").rstrip(".")
         fmt_price = f"₩{price:,.0f}" if price >= 1 else f"₩{price:.6f}"
         fmt_eval = f"₩{eval_amount:,}"
@@ -1380,6 +1424,19 @@ def _render_balance(balance: list[dict]) -> str:
             else "-"
         )
         fmt_buy_amt = f"₩{buy_amount:,}" if buy_amount > 0 else "-"
+        if avg_buy_price > 0:
+            pnl_krw = eval_amount - buy_amount
+            pnl_pct = (price / avg_buy_price - 1) * 100
+            pnl_sign = "+" if pnl_krw >= 0 else "-"
+            pnl_html = (
+                f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
+                f'<span style="color:#64748b;font-size:.78rem">평가손익</span>'
+                f'<span style="color:{border_color};font-weight:700;font-size:.82rem">'
+                f'{pnl_sign}₩{abs(pnl_krw):,.0f} ({pnl_sign}{abs(pnl_pct):.2f}%)</span>'
+                f'</div>'
+            )
+        else:
+            pnl_html = ""
         used_row = (
             f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
             f'<span style="color:#64748b;font-size:.75rem">주문중</span>'
@@ -1388,10 +1445,11 @@ def _render_balance(balance: list[dict]) -> str:
         ) if used > 0 else ""
 
         cards.append(
-            f'<div style="background:#0f172a;border:1px solid #334155;border-radius:.6rem;padding:.9rem">'
+            f'<div style="background:{bg_tint};border:1px solid {border_color};'
+            f'border-left:3px solid {border_color};border-radius:.6rem;padding:.9rem">'
             f'<div style="font-size:1rem;font-weight:800;color:#f1f5f9;margin-bottom:.65rem;'
             f'display:flex;justify-content:space-between;align-items:baseline">'
-            f'<span>{currency}</span>'
+            f'<span>{icon_html}{currency}</span>'
             f'<span style="font-size:.7rem;font-weight:400;color:#64748b">{fmt_qty}</span>'
             f'</div>'
             f'{used_row}'
@@ -1412,6 +1470,7 @@ def _render_balance(balance: list[dict]) -> str:
             f'<span style="color:#64748b;font-size:.78rem">평가금액</span>'
             f'<span style="color:#10b981;font-weight:700;font-size:.88rem">{fmt_eval}</span>'
             f'</div>'
+            f'{pnl_html}'
             f'</div>'
         )
 
