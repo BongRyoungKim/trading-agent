@@ -643,6 +643,11 @@ function renderBalance(items) {{
   const fmtKRW = v => '₩' + Math.round(v).toLocaleString('ko-KR');
   const fmtQty = v => parseFloat(v.toFixed(8)).toString();
   const fmtPrice = v => v >= 1 ? fmtKRW(v) : '₩' + v.toFixed(6);
+  // 라벨/값 스타일을 카드 전체에서 통일한다 (요구사항: 라벨 1단계, 값 최대 2단계 + tabular-nums 우측정렬)
+  const labelStyle = 'color:#64748b;font-size:.75rem;white-space:nowrap;flex-shrink:0';
+  const rowStyle = 'display:flex;justify-content:space-between;margin:.25rem 0';
+  const rowStyleTop = 'display:flex;justify-content:space-between;align-items:flex-start;margin:.25rem 0';
+  const valueBase = 'font-variant-numeric:tabular-nums;white-space:nowrap';
   // 수익/본전/손해/정보없음 카드 스타일 (Python _balance_card_style()과 임계값·색상 동일하게 유지)
   const cardStyle = (avgBuy, price) => {{
     if (avgBuy <= 0) return {{border: '#334155', bg: '#0f172a', icon: '', iconColor: '#64748b'}};
@@ -657,48 +662,48 @@ function renderBalance(items) {{
     const iconHtml = style.icon
       ? `<span style="color:${{style.iconColor}};font-size:.75rem;margin-right:.35rem">${{style.icon}}</span>` : '';
     const usedRow = b.used > 0
-      ? `<div style="display:flex;justify-content:space-between;margin:.25rem 0">
-           <span style="color:#64748b;font-size:.75rem">주문중</span>
-           <span style="color:#64748b;font-size:.75rem">${{fmtQty(b.used)}}</span>
+      ? `<div style="${{rowStyle}}">
+           <span style="${{labelStyle}}">주문중</span>
+           <span style="${{valueBase}};color:#64748b;font-size:.8rem">${{fmtQty(b.used)}}</span>
          </div>` : '';
-    let pnlHtml = '';
+    // 평가금액 + 평가손익을 한 줄로 병합: 큰 값(평가금액) 아래 보조텍스트(손익)를 붙인다
+    let pnlSubHtml = '';
     if (avgBuy > 0) {{
       const pnlKrw = (b.eval_amount || 0) - (b.buy_amount || 0);
       const pnlPct = ((b.price || 0) / avgBuy - 1) * 100;
       const pnlSign = pnlKrw >= 0 ? '+' : '-';
-      pnlHtml = `<div style="display:flex;justify-content:space-between;margin:.25rem 0">
-        <span style="color:#64748b;font-size:.78rem">평가손익</span>
-        <span style="color:${{style.border}};font-weight:700;font-size:.82rem">${{pnlSign}}${{fmtKRW(Math.abs(pnlKrw))}} (${{pnlSign}}${{Math.abs(pnlPct).toFixed(2)}}%)</span>
-      </div>`;
+      pnlSubHtml = `<span style="${{valueBase}};color:${{style.border}};font-size:.72rem;font-weight:600">${{pnlSign}}${{fmtKRW(Math.abs(pnlKrw))}} (${{pnlSign}}${{Math.abs(pnlPct).toFixed(2)}}%)</span>`;
     }}
     return `<div style="background:${{style.bg}};border:1px solid ${{style.border}};border-left:3px solid ${{style.border}};border-radius:.6rem;padding:.9rem">
       <div style="font-size:1rem;font-weight:800;color:#f1f5f9;margin-bottom:.65rem;display:flex;justify-content:space-between;align-items:baseline">
         <span>${{iconHtml}}${{b.currency}}</span>
-        <span style="font-size:.7rem;font-weight:400;color:#64748b">${{fmtQty(b.free)}}</span>
+        <span style="${{valueBase}};font-size:.7rem;font-weight:400;color:#64748b">${{fmtQty(b.free)}}</span>
       </div>
       ${{usedRow}}
-      <div style="display:flex;justify-content:space-between;margin:.25rem 0">
-        <span style="color:#64748b;font-size:.78rem">현재가</span>
-        <span style="color:#94a3b8;font-size:.82rem">${{fmtPrice(b.price || 0)}}</span>
+      <div style="${{rowStyle}}">
+        <span style="${{labelStyle}}">현재가</span>
+        <span style="${{valueBase}};color:#94a3b8;font-size:.8rem">${{fmtPrice(b.price || 0)}}</span>
       </div>
-      <div style="display:flex;justify-content:space-between;margin:.25rem 0">
-        <span style="color:#64748b;font-size:.78rem">매수평균가</span>
-        <span style="color:#60a5fa;font-size:.82rem">${{avgBuy > 0 ? fmtPrice(avgBuy) : '-'}}</span>
+      <div style="${{rowStyle}}">
+        <span style="${{labelStyle}}">매수평균가</span>
+        <span style="${{valueBase}};color:#60a5fa;font-size:.8rem">${{avgBuy > 0 ? fmtPrice(avgBuy) : '-'}}</span>
       </div>
       <div style="border-top:1px solid #1e293b;margin:.55rem 0 .4rem"></div>
-      <div style="display:flex;justify-content:space-between;margin:.25rem 0">
-        <span style="color:#64748b;font-size:.78rem">매수금액</span>
-        <span style="color:#a78bfa;font-size:.82rem">${{b.buy_amount > 0 ? fmtKRW(b.buy_amount) : '-'}}</span>
+      <div style="${{rowStyle}}">
+        <span style="${{labelStyle}}">매수금액</span>
+        <span style="${{valueBase}};color:#a78bfa;font-size:.8rem">${{b.buy_amount > 0 ? fmtKRW(b.buy_amount) : '-'}}</span>
       </div>
-      <div style="display:flex;justify-content:space-between;margin:.25rem 0">
-        <span style="color:#64748b;font-size:.78rem">평가금액</span>
-        <span style="color:#10b981;font-weight:700;font-size:.88rem">${{fmtKRW(b.eval_amount || 0)}}</span>
+      <div style="${{rowStyleTop}}">
+        <span style="${{labelStyle}}">평가금액</span>
+        <span style="display:flex;flex-direction:column;align-items:flex-end;gap:.1rem">
+          <span style="${{valueBase}};color:#10b981;font-weight:700;font-size:.95rem">${{fmtKRW(b.eval_amount || 0)}}</span>
+          ${{pnlSubHtml}}
+        </span>
       </div>
-      ${{pnlHtml}}
     </div>`;
   }});
   const total = items.reduce((s, b) => s + (b.eval_amount || 0), 0);
-  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.75rem">${{cards.join('')}}</div>
+  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:.75rem">${{cards.join('')}}</div>
     <div class="stat-row" style="margin-top:.75rem;border-top:1px solid #334155;padding-top:.6rem">
       <span class="stat-label">총 평가금액</span>
       <span class="stat-value" style="color:#10b981;font-weight:700">${{fmtKRW(total)}}</span>
@@ -1399,6 +1404,12 @@ def _render_balance(balance: list[dict]) -> str:
     if not balance:
         return '<p class="empty">잔고 없음</p>'
 
+    # 라벨/값 스타일을 카드 전체에서 통일한다 (요구사항: 라벨 1단계, 값 최대 2단계 + tabular-nums 우측정렬)
+    label_style = "color:#64748b;font-size:.75rem;white-space:nowrap;flex-shrink:0"
+    row_style = "display:flex;justify-content:space-between;margin:.25rem 0"
+    row_style_top = "display:flex;justify-content:space-between;align-items:flex-start;margin:.25rem 0"
+    value_base = "font-variant-numeric:tabular-nums;white-space:nowrap"
+
     cards = []
     for b in balance:
         currency = b["currency"]
@@ -1424,23 +1435,23 @@ def _render_balance(balance: list[dict]) -> str:
             else "-"
         )
         fmt_buy_amt = f"₩{buy_amount:,}" if buy_amount > 0 else "-"
+
+        # 평가금액 + 평가손익을 한 줄로 병합: 큰 값(평가금액) 아래 보조텍스트(손익)를 붙인다
+        pnl_sub_html = ""
         if avg_buy_price > 0:
             pnl_krw = eval_amount - buy_amount
             pnl_pct = (price / avg_buy_price - 1) * 100
             pnl_sign = "+" if pnl_krw >= 0 else "-"
-            pnl_html = (
-                f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
-                f'<span style="color:#64748b;font-size:.78rem">평가손익</span>'
-                f'<span style="color:{border_color};font-weight:700;font-size:.82rem">'
+            pnl_sub_html = (
+                f'<span style="{value_base};color:{border_color};font-size:.72rem;font-weight:600">'
                 f'{pnl_sign}₩{abs(pnl_krw):,.0f} ({pnl_sign}{abs(pnl_pct):.2f}%)</span>'
-                f'</div>'
             )
-        else:
-            pnl_html = ""
+
         used_row = (
-            f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
-            f'<span style="color:#64748b;font-size:.75rem">주문중</span>'
-            f'<span style="color:#64748b;font-size:.75rem">{f"{used:.8f}".rstrip("0").rstrip(".")}</span>'
+            f'<div style="{row_style}">'
+            f'<span style="{label_style}">주문중</span>'
+            f'<span style="{value_base};color:#64748b;font-size:.8rem">'
+            f'{f"{used:.8f}".rstrip("0").rstrip(".")}</span>'
             f'</div>'
         ) if used > 0 else ""
 
@@ -1450,33 +1461,35 @@ def _render_balance(balance: list[dict]) -> str:
             f'<div style="font-size:1rem;font-weight:800;color:#f1f5f9;margin-bottom:.65rem;'
             f'display:flex;justify-content:space-between;align-items:baseline">'
             f'<span>{icon_html}{currency}</span>'
-            f'<span style="font-size:.7rem;font-weight:400;color:#64748b">{fmt_qty}</span>'
+            f'<span style="{value_base};font-size:.7rem;font-weight:400;color:#64748b">{fmt_qty}</span>'
             f'</div>'
             f'{used_row}'
-            f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
-            f'<span style="color:#64748b;font-size:.78rem">현재가</span>'
-            f'<span style="color:#94a3b8;font-size:.82rem">{fmt_price}</span>'
+            f'<div style="{row_style}">'
+            f'<span style="{label_style}">현재가</span>'
+            f'<span style="{value_base};color:#94a3b8;font-size:.8rem">{fmt_price}</span>'
             f'</div>'
-            f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
-            f'<span style="color:#64748b;font-size:.78rem">매수평균가</span>'
-            f'<span style="color:#60a5fa;font-size:.82rem">{fmt_avg}</span>'
+            f'<div style="{row_style}">'
+            f'<span style="{label_style}">매수평균가</span>'
+            f'<span style="{value_base};color:#60a5fa;font-size:.8rem">{fmt_avg}</span>'
             f'</div>'
             f'<div style="border-top:1px solid #1e293b;margin:.55rem 0 .4rem"></div>'
-            f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
-            f'<span style="color:#64748b;font-size:.78rem">매수금액</span>'
-            f'<span style="color:#a78bfa;font-size:.82rem">{fmt_buy_amt}</span>'
+            f'<div style="{row_style}">'
+            f'<span style="{label_style}">매수금액</span>'
+            f'<span style="{value_base};color:#a78bfa;font-size:.8rem">{fmt_buy_amt}</span>'
             f'</div>'
-            f'<div style="display:flex;justify-content:space-between;margin:.25rem 0">'
-            f'<span style="color:#64748b;font-size:.78rem">평가금액</span>'
-            f'<span style="color:#10b981;font-weight:700;font-size:.88rem">{fmt_eval}</span>'
+            f'<div style="{row_style_top}">'
+            f'<span style="{label_style}">평가금액</span>'
+            f'<span style="display:flex;flex-direction:column;align-items:flex-end;gap:.1rem">'
+            f'<span style="{value_base};color:#10b981;font-weight:700;font-size:.95rem">{fmt_eval}</span>'
+            f'{pnl_sub_html}'
+            f'</span>'
             f'</div>'
-            f'{pnl_html}'
             f'</div>'
         )
 
     total_eval = sum(b.get("eval_amount", 0) for b in balance)
     grid = (
-        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.75rem">'
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:.75rem">'
         + "".join(cards)
         + "</div>"
         + f'<div class="stat-row" style="margin-top:.75rem;border-top:1px solid #334155;padding-top:.6rem">'
