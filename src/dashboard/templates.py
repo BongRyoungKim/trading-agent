@@ -38,6 +38,8 @@ def render_dashboard(
     mode_switch_html = _render_mode_switch_btn(mode)
 
     equity_svg = _render_equity_svg(equity)
+    symbol_pnl_svg = _render_symbol_pnl_svg(trades)
+    trade_filter_bar_html = _render_trade_filter_bar(trades)
     stats_html = _render_stats(stats)
     positions_html = _render_positions(positions)
     buy_html = _render_buy_history(trades, positions)
@@ -56,38 +58,55 @@ def render_dashboard(
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>
+    // 테마 깜빡임(FOUC) 방지 — CSS가 적용되기 전에 저장된 테마를 <html> 속성으로 반영한다.
+    (function() {{
+      try {{
+        var t = localStorage.getItem('dashboard-theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+      }} catch (e) {{}}
+    }})();
+  </script>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>트레이딩 에이전트 대시보드</title>
   <style>
     *{{box-sizing:border-box;margin:0;padding:0}}
-    body{{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}}
-    header{{background:#1e293b;border-bottom:1px solid #334155;padding:1rem 2rem;display:flex;align-items:center;justify-content:space-between}}
-    header h1{{font-size:1.2rem;font-weight:700;color:#f1f5f9}}
-    .meta{{font-size:.75rem;color:#64748b}}
+    /* 라이트/다크 테마 변수 — 배경·카드·테두리·기본 텍스트色 위주로만 변수화(범위 최소화) */
+    :root{{--bg:#0f172a;--bg-inset:#0f172a;--card-bg:#1e293b;--border:#334155;--text:#e2e8f0;--text-strong:#f1f5f9;--text-muted:#64748b;--text-dim:#475569}}
+    html[data-theme="light"]{{--bg:#f1f5f9;--bg-inset:#e2e8f0;--card-bg:#ffffff;--border:#cbd5e1;--text:#1e293b;--text-strong:#0f172a;--text-muted:#475569;--text-dim:#64748b}}
+    body{{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}}
+    header{{background:var(--card-bg);border-bottom:1px solid var(--border);padding:1rem 2rem;display:flex;align-items:center;justify-content:space-between}}
+    header h1{{font-size:1.2rem;font-weight:700;color:var(--text-strong)}}
+    .meta{{font-size:.75rem;color:var(--text-muted)}}
+    .theme-toggle-btn{{background:none;border:1px solid var(--border);border-radius:9999px;width:2.1rem;height:2.1rem;font-size:1rem;line-height:1;cursor:pointer;color:var(--text);display:flex;align-items:center;justify-content:center;padding:0}}
     main{{max-width:1200px;margin:0 auto;padding:1.5rem}}
     .top-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1.2rem;margin-bottom:1.5rem}}
-    .card{{background:#1e293b;border:1px solid #334155;border-radius:.75rem;padding:1.25rem}}
-    .card h2{{font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:.9rem}}
+    .card{{background:var(--card-bg);border:1px solid var(--border);border-radius:.75rem;padding:1.25rem}}
+    .card h2{{font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:.9rem}}
     .stat-row{{display:flex;justify-content:space-between;align-items:center;margin:.4rem 0}}
     .stat-label{{color:#94a3b8;font-size:.875rem}}
     .stat-value{{font-weight:600;font-size:.95rem}}
     .badge{{display:inline-block;padding:.2rem .6rem;border-radius:9999px;font-size:.7rem;font-weight:700}}
     /* Tabs */
-    .tabs{{display:flex;gap:.5rem;margin-bottom:1rem;border-bottom:1px solid #334155;padding-bottom:.5rem}}
-    .tab{{padding:.4rem 1rem;cursor:pointer;border-radius:.4rem .4rem 0 0;font-size:.85rem;color:#64748b;background:none;border:none}}
-    .tab.active{{color:#e2e8f0;background:#334155}}
+    .tabs{{display:flex;gap:.5rem;margin-bottom:1rem;border-bottom:1px solid var(--border);padding-bottom:.5rem}}
+    .tab{{padding:.4rem 1rem;cursor:pointer;border-radius:.4rem .4rem 0 0;font-size:.85rem;color:var(--text-muted);background:none;border:none}}
+    .tab.active{{color:var(--text);background:var(--border)}}
     .tab-panel{{display:none}}.tab-panel.active{{display:block}}
+    /* Trade filters (기간/종목/승패) */
+    .trade-filters{{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:1rem}}
+    .trade-filters select{{flex:1 1 130px;min-width:110px}}
+    select{{background:var(--card-bg);color:var(--text);border:1px solid var(--border);border-radius:.4rem;padding:.45rem .6rem;font-size:.82rem;cursor:pointer}}
     /* Tables */
     table{{width:100%;border-collapse:collapse;font-size:.82rem}}
-    th{{text-align:left;color:#64748b;font-size:.72rem;text-transform:uppercase;padding:.5rem 0;border-bottom:1px solid #334155}}
-    td{{padding:.55rem 0;border-bottom:1px solid #1e293b}}
+    th{{text-align:left;color:var(--text-muted);font-size:.72rem;text-transform:uppercase;padding:.5rem 0;border-bottom:1px solid var(--border)}}
+    td{{padding:.55rem 0;border-bottom:1px solid var(--card-bg)}}
     tr:last-child td{{border-bottom:none}}
     /* Ticks table — centered, bold headers, cell borders */
-    .ticks-table th{{text-align:center;font-weight:700;color:#94a3b8;font-size:.75rem;border:1.5px solid #334155;padding:.45rem .5rem;background:#0f172a;text-transform:none}}
-    .ticks-table td{{text-align:center;border:1px solid #1e293b;padding:.5rem .4rem;border-bottom:1px solid #1e293b}}
-    .ticks-table tr:last-child td{{border-bottom:1px solid #1e293b}}
-    .empty{{color:#475569;font-size:.875rem;text-align:center;padding:1.5rem 0}}
+    .ticks-table th{{text-align:center;font-weight:700;color:#94a3b8;font-size:.75rem;border:1.5px solid var(--border);padding:.45rem .5rem;background:var(--bg-inset);text-transform:none}}
+    .ticks-table td{{text-align:center;border:1px solid var(--card-bg);padding:.5rem .4rem;border-bottom:1px solid var(--card-bg)}}
+    .ticks-table tr:last-child td{{border-bottom:1px solid var(--card-bg)}}
+    .empty{{color:var(--text-dim);font-size:.875rem;text-align:center;padding:1.5rem 0}}
     .win{{color:#10b981}}.loss{{color:#ef4444}}
     /* Controls */
     .controls{{display:flex;gap:.75rem;margin-top:1.25rem}}
@@ -95,19 +114,19 @@ def render_dashboard(
     button:hover{{opacity:.85}}
     .btn-pause{{background:#f59e0b;color:#000}}.btn-resume{{background:#10b981;color:#000}}
     .btn-live{{background:#10b981;color:#000}}.btn-to-paper{{background:#6366f1;color:#fff}}
-    .btn-locked{{background:#1e293b;color:#475569;cursor:not-allowed;border:1px solid #334155}}
-    .mode-switch{{margin-top:1rem;border-top:1px solid #334155;padding-top:.9rem}}
+    .btn-locked{{background:var(--card-bg);color:var(--text-dim);cursor:not-allowed;border:1px solid var(--border)}}
+    .mode-switch{{margin-top:1rem;border-top:1px solid var(--border);padding-top:.9rem}}
     /* Strategy criteria */
     .criteria-grid{{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:.5rem}}
     .criteria-col h3{{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem}}
     .criteria-col h3.buy{{color:#10b981}}.criteria-col h3.sell{{color:#ef4444}}
     .criteria-row{{display:flex;align-items:flex-start;gap:.4rem;margin:.3rem 0;font-size:.8rem;color:#cbd5e1}}
     .criteria-row .ci{{font-size:.9rem;flex-shrink:0}}
-    .param-row{{display:inline-flex;align-items:center;gap:.3rem;margin:.2rem .3rem;background:#0f172a;border-radius:.3rem;padding:.2rem .5rem;font-size:.78rem}}
-    .param-key{{color:#64748b}}.param-val{{color:#f1f5f9;font-weight:600}}
+    .param-row{{display:inline-flex;align-items:center;gap:.3rem;margin:.2rem .3rem;background:var(--bg-inset);border-radius:.3rem;padding:.2rem .5rem;font-size:.78rem}}
+    .param-key{{color:var(--text-muted)}}.param-val{{color:var(--text-strong);font-weight:600}}
     /* Condition pill badges */
     .cp{{display:inline-block;padding:.15rem .35rem;border-radius:.25rem;font-size:.72rem;font-weight:700;margin:0 2px;vertical-align:middle;letter-spacing:.02em;transition:opacity .2s}}
-    .cp-dim{{background:#1e293b;color:#3d5060}}
+    .cp-dim{{background:var(--card-bg);color:#3d5060}}
     /* Buy condition (active) — unified green */
     .cp-buy{{background:#10b98120;color:#34d399;border:1px solid #10b981}}
     /* Sell trigger (active) — unified red */
@@ -117,19 +136,19 @@ def render_dashboard(
     .tick-flash{{animation:tickFlash .8s ease-out}}
     .tick-live-dot{{display:inline-block;width:7px;height:7px;border-radius:50%;background:#10b981;margin-right:.4rem;animation:pulse 2s infinite}}
     @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
-    .toast{{position:fixed;bottom:2rem;right:2rem;background:#334155;padding:.7rem 1.2rem;border-radius:.5rem;font-size:.875rem;display:none;z-index:99}}
+    .toast{{position:fixed;bottom:2rem;right:2rem;background:var(--border);padding:.7rem 1.2rem;border-radius:.5rem;font-size:.875rem;display:none;z-index:99}}
     /* SVG chart — 모바일에서 텍스트가 안 뭉개지게 가로 스크롤 허용(아래 미디어쿼리에서 min-width 지정) */
-    .chart-wrap{{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;background:#0f172a;border-radius:.75rem;margin-top:.5rem;padding:.5rem}}
+    .chart-wrap{{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;background:var(--bg-inset);border-radius:.75rem;margin-top:.5rem;padding:.5rem}}
     svg{{width:100%;height:auto;display:block}}
     /* Stats grid */
     .stats-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;margin-top:.25rem}}
-    .stat-box{{background:#0f172a;border-radius:.5rem;padding:.75rem;text-align:center}}
+    .stat-box{{background:var(--bg-inset);border-radius:.5rem;padding:.75rem;text-align:center}}
     .stat-box .val{{font-size:1.25rem;font-weight:700;margin-bottom:.25rem}}
-    .stat-box .lbl{{font-size:.7rem;color:#64748b;text-transform:uppercase}}
-    .status-box{{background:#0f172a;border:1px solid #334155;border-radius:.5rem;padding:.65rem .5rem;text-align:center}}
-    .wr-bar{{height:6px;background:#1e293b;border-radius:9999px;overflow:hidden;margin-top:.4rem}}
+    .stat-box .lbl{{font-size:.7rem;color:var(--text-muted);text-transform:uppercase}}
+    .status-box{{background:var(--bg-inset);border:1px solid var(--border);border-radius:.5rem;padding:.65rem .5rem;text-align:center}}
+    .wr-bar{{height:6px;background:var(--card-bg);border-radius:9999px;overflow:hidden;margin-top:.4rem}}
     .wr-fill{{height:100%;border-radius:9999px;transition:width .6s ease}}
-    code{{background:#0f172a;padding:.1rem .3rem;border-radius:.25rem;font-size:.8rem}}
+    code{{background:var(--bg-inset);padding:.1rem .3rem;border-radius:.25rem;font-size:.8rem}}
     /* 2컬럼 레이아웃 (엔진상태+포트폴리오, 성과분석 승률박스 등) — 데스크톱 기본값,
        모바일에서는 아래 미디어쿼리로 1~2컬럼으로 접는다 */
     .row-2{{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;margin-bottom:1.2rem}}
@@ -162,7 +181,10 @@ def render_dashboard(
 <body>
 <header>
   <h1>⚡ Trading Agent Dashboard</h1>
-  <span class="meta" id="meta">30초 자동 새로고침</span>
+  <div style="display:flex;align-items:center;gap:.75rem">
+    <span class="meta" id="meta">30초 자동 새로고침</span>
+    <button type="button" class="theme-toggle-btn" id="theme-toggle" onclick="toggleTheme()" aria-label="라이트/다크 테마 전환">🌙</button>
+  </div>
 </header>
 <main>
   <!-- Row 1: 엔진상태 + 포트폴리오 -->
@@ -218,8 +240,19 @@ def render_dashboard(
     </div>
   </div>
 
+  <!-- Symbol P&L comparison -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <h2>심볼별 손익 비교</h2>
+    <div class="chart-wrap" id="symbol-pnl-wrap">
+      {symbol_pnl_svg}
+    </div>
+  </div>
+
   <!-- Tabs: Positions / Buy / Sell -->
   <div class="card">
+    <div class="trade-filters" id="trade-filters">
+      {trade_filter_bar_html}
+    </div>
     <div class="tabs">
       <button class="tab active" onclick="switchTab('positions',this)">오픈 포지션 ({len(positions)})</button>
       <button class="tab" onclick="switchTab('buys',this)">매수 이력 ({len(trades)})</button>
@@ -241,13 +274,14 @@ function switchTab(name, btn) {{
 }}
 let _strategyParams = {{}};
 let _positionsMap = {{}};  // symbol → position (entry_price, amount)
+let _lastTrades = [];  // 필터(기간/종목/승패)가 적용되기 전 원본 거래 목록 캐시
 async function refresh() {{
   try {{
     const [s, pos, pnl, trades, stats, eq, bal, ticks, strat, pendingParams] = await Promise.all([
       fetch('/api/status').then(r=>r.json()),
       fetch('/api/positions').then(r=>r.json()),
       fetch('/api/pnl').then(r=>r.json()),
-      fetch('/api/trades').then(r=>r.json()),
+      fetch('/api/trades?limit=200').then(r=>r.json()),
       fetch('/api/stats').then(r=>r.json()),
       fetch('/api/equity').then(r=>r.json()),
       fetch('/api/balance').then(r=>r.json()),
@@ -269,13 +303,13 @@ async function refresh() {{
     (ticks || []).forEach(t => {{ _ticksMap[t.symbol] = t; }});
     renderTicks(ticks);
     renderPositions(pos);
-    renderBuyHistory(trades);
-    renderSellHistory(trades);
-    // Update main tab counts (scope to .tabs bar, not tick tabs)
+    _lastTrades = trades || [];
+    _populateSymbolFilter(_lastTrades);
+    applyTradeFilters();
+    renderSymbolPnl(_lastTrades);
+    // Update positions tab count (buy/sell 탭 카운트는 applyTradeFilters()가 갱신)
     const mainTabs = document.querySelectorAll('.tabs .tab');
     if (mainTabs[0]) mainTabs[0].textContent = `오픈 포지션 (${{(pos||[]).length}})`;
-    if (mainTabs[1]) mainTabs[1].textContent = `매수 이력 (${{trades.length}})`;
-    if (mainTabs[2]) mainTabs[2].textContent = `매도 이력 (${{trades.length}})`;
   }} catch(e) {{ console.warn('Refresh failed', e); }}
 }}
 function renderStrategy(s) {{
@@ -748,20 +782,63 @@ async function refreshPositionsTrades() {{
   try {{
     const [pos, trades, pnl] = await Promise.all([
       fetch('/api/positions').then(r=>r.json()),
-      fetch('/api/trades').then(r=>r.json()),
+      fetch('/api/trades?limit=200').then(r=>r.json()),
       fetch('/api/pnl').then(r=>r.json()),
     ]);
     _positionsMap = {{}};
     (pos || []).forEach(p => {{ _positionsMap[p.symbol] = p; }});
     renderPositions(pos);
-    renderBuyHistory(trades);
-    renderSellHistory(trades);
+    _lastTrades = trades || [];
+    _populateSymbolFilter(_lastTrades);
+    applyTradeFilters();
+    renderSymbolPnl(_lastTrades);
     renderPnl(pnl);
     const mainTabs = document.querySelectorAll('.tabs .tab');
     if (mainTabs[0]) mainTabs[0].textContent = `오픈 포지션 (${{(pos||[]).length}})`;
-    if (mainTabs[1]) mainTabs[1].textContent = `매수 이력 (${{trades.length}})`;
-    if (mainTabs[2]) mainTabs[2].textContent = `매도 이력 (${{trades.length}})`;
   }} catch(e) {{ /* silent */ }}
+}}
+// 기간(전체/7일/30일/90일) · 종목 · 승패 필터 — 이미 불러온 _lastTrades 배열 안에서만 필터링(서버 재요청 없음)
+function _filterTrades(trades) {{
+  const period = (document.getElementById('filter-period') || {{}}).value || 'all';
+  const symbol = (document.getElementById('filter-symbol') || {{}}).value || 'all';
+  const result = (document.getElementById('filter-result') || {{}}).value || 'all';
+  const now = Date.now();
+  return (trades || []).filter(t => {{
+    if (symbol !== 'all' && t.symbol !== symbol) return false;
+    if (period !== 'all') {{
+      const days = parseInt(period, 10);
+      const ts = t.exit_time || t.entry_time;
+      if (ts) {{
+        const diffDays = (now - new Date(ts).getTime()) / 86400000;
+        if (diffDays > days) return false;
+      }}
+    }}
+    if (result !== 'all') {{
+      const isWin = (t.pnl || 0) >= 0;
+      if (result === 'win' && !isWin) return false;
+      if (result === 'loss' && isWin) return false;
+    }}
+    return true;
+  }});
+}}
+// 종목 드롭다운 옵션을 실제 거래 데이터에서 동적으로 채운다 (현재 선택값은 유지)
+function _populateSymbolFilter(trades) {{
+  const sel = document.getElementById('filter-symbol');
+  if (!sel) return;
+  const symbols = Array.from(new Set((trades || []).map(t => t.symbol))).sort();
+  const current = sel.value;
+  sel.innerHTML = '<option value="all">전체 종목</option>' +
+    symbols.map(s => `<option value="${{s}}">${{s}}</option>`).join('');
+  if (symbols.includes(current)) sel.value = current;
+}}
+// 필터 select 변경 시 호출 — 매수/매도 이력 탭과 탭 카운트를 함께 갱신한다
+function applyTradeFilters() {{
+  const filtered = _filterTrades(_lastTrades);
+  renderBuyHistory(filtered);
+  renderSellHistory(filtered);
+  const mainTabs = document.querySelectorAll('.tabs .tab');
+  if (mainTabs[1]) mainTabs[1].textContent = `매수 이력 (${{filtered.length}})`;
+  if (mainTabs[2]) mainTabs[2].textContent = `매도 이력 (${{filtered.length}})`;
 }}
 function renderBuyHistory(trades) {{
   const el = document.getElementById('tab-buys');
@@ -928,6 +1005,81 @@ function renderEquity(pts) {{
 
   wrap.innerHTML = `<svg viewBox="0 0 ${{W}} ${{H}}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto">${{svgParts.join('')}}</svg>`;
 }}
+// 심볼별 실현 손익 합계 막대그래프 — 항상 필터 미적용 전체 거래(_lastTrades) 기준으로 그린다
+// (거래내역 필터와 독립적으로 유지 — 과설계 방지)
+function renderSymbolPnl(trades) {{
+  const wrap = document.getElementById('symbol-pnl-wrap');
+  if (!wrap) return;
+  if (!trades || trades.length === 0) {{
+    wrap.innerHTML = '<p class="empty">거래 없음 — 첫 청산 후 표시됩니다</p>';
+    return;
+  }}
+  const totals = {{}};
+  trades.forEach(t => {{ totals[t.symbol] = (totals[t.symbol] || 0) + (t.pnl || 0); }});
+  const ranked = Object.entries(totals).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 8);
+  if (ranked.length === 0) {{ wrap.innerHTML = '<p class="empty">거래 없음</p>'; return; }}
+
+  const values = ranked.map(([, v]) => v);
+  const maxVal = Math.max(...values, 0);
+  const minVal = Math.min(...values, 0);
+  const range = Math.max(maxVal - minVal, 1);
+  const maxAbs = Math.max(Math.abs(maxVal), Math.abs(minVal), 1);
+
+  const n = ranked.length;
+  const W = 1000, H = 260, padL = 82, padR = 20, padT = 40, padB = 50;
+  const chartW = W - padL - padR, chartH = H - padT - padB;
+  const barW = Math.max(24, chartW / n - 16);
+  const zeroY = padT + chartH * maxVal / range;
+
+  const parts = [];
+  parts.push(`<rect x="${{padL}}" y="${{padT}}" width="${{chartW}}" height="${{chartH}}" fill="#080e1a" rx="4"/>`);
+
+  [-1, -0.5, 0, 0.5, 1].forEach(factor => {{
+    const lineV = factor * maxAbs;
+    const lineY = padT + chartH * (maxVal - lineV) / range;
+    if (lineY < padT || lineY > padT + chartH) return;
+    const isZero = factor === 0;
+    const stroke = isZero ? '#334155' : '#1e2d3d';
+    const dash = isZero ? '' : '5,3';
+    parts.push(`<line x1="${{padL}}" y1="${{lineY.toFixed(1)}}" x2="${{W-padR}}" y2="${{lineY.toFixed(1)}}" stroke="${{stroke}}" stroke-width="${{isZero?1.5:1}}" stroke-dasharray="${{dash}}"/>`);
+    const labelV = Math.round(Math.abs(lineV));
+    const lcolor = labelV===0 ? '#475569' : (lineV>0?'#10b981':'#ef4444');
+    const sign = labelV===0 ? '' : (lineV>0?'+':'-');
+    const ltext = labelV===0 ? '0' : `${{sign}}₩${{labelV.toLocaleString('ko-KR')}}`;
+    parts.push(`<text x="${{padL-8}}" y="${{(lineY+4.5).toFixed(1)}}" fill="${{lcolor}}" font-size="13" text-anchor="end" font-family="system-ui,sans-serif">${{ltext}}</text>`);
+  }});
+
+  ranked.forEach(([sym, v], i) => {{
+    const x = padL + (i + 0.5) * chartW / n - barW / 2;
+    const color = v >= 0 ? '#10b981' : '#ef4444';
+    const bh = v !== 0 ? Math.max(2, Math.abs(v) / range * chartH) : 2;
+    const y = v >= 0 ? zeroY - bh : zeroY;
+    parts.push(`<rect x="${{x.toFixed(1)}}" y="${{y.toFixed(1)}}" width="${{barW.toFixed(1)}}" height="${{bh.toFixed(1)}}" fill="${{color}}" rx="3" opacity="0.88"/>`);
+    if (bh > 20) {{
+      const sign = v >= 0 ? '+' : '';
+      const labelY = v >= 0 ? y - 7 : y + bh + 15;
+      parts.push(`<text x="${{(x+barW/2).toFixed(1)}}" y="${{labelY.toFixed(1)}}" fill="${{color}}" font-size="12" text-anchor="middle" font-weight="700" font-family="system-ui,sans-serif">${{sign}}₩${{Math.round(v).toLocaleString('ko-KR')}}</text>`);
+    }}
+    const label = sym.includes('/') ? sym.split('/')[0] : sym;
+    parts.push(`<text x="${{(x+barW/2).toFixed(1)}}" y="${{H-16}}" fill="#94a3b8" font-size="13" text-anchor="middle" font-family="system-ui,sans-serif">${{label}}</text>`);
+  }});
+
+  parts.push(`<text x="${{padL}}" y="24" fill="#94a3b8" font-size="15" font-weight="500" font-family="system-ui,sans-serif">심볼별 실현 손익 (상위 ${{n}}개)</text>`);
+
+  wrap.innerHTML = `<svg viewBox="0 0 ${{W}} ${{H}}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto">${{parts.join('')}}</svg>`;
+}}
+function toggleTheme() {{
+  const html = document.documentElement;
+  const current = html.getAttribute('data-theme') || 'dark';
+  const next = current === 'light' ? 'dark' : 'light';
+  html.setAttribute('data-theme', next);
+  try {{ localStorage.setItem('dashboard-theme', next); }} catch(e) {{}}
+  _updateThemeToggleIcon(next);
+}}
+function _updateThemeToggleIcon(theme) {{
+  const btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = theme === 'light' ? '☀' : '🌙';
+}}
 async function engineAction(action) {{
   try {{
     const res = await fetch('/api/engine/'+action, {{method:'POST'}});
@@ -993,6 +1145,8 @@ setInterval(refresh, 30000);
 setInterval(refreshPositionsTrades, 5000);
 // Initialize on load
 (function() {{
+  // <head>의 동기 스크립트가 이미 반영한 저장된 테마에 토글 아이콘을 맞춘다
+  _updateThemeToggleIcon(document.documentElement.getAttribute('data-theme') || 'dark');
   // Seed _ticksMap from server-rendered ticks data
   {_ticks_seed_js}
   _initTickStream();
@@ -1258,6 +1412,135 @@ def _render_equity_svg(equity: list[dict]) -> str:
     )
     parts.append("</svg>")
     return "".join(parts)
+
+
+def _render_symbol_pnl_svg(trades: list[dict]) -> str:
+    """Render top-N (by |realized P&L|) symbols as an inline SVG bar chart.
+
+    Mirrors renderSymbolPnl() in the client-side JS below (same dual
+    server+client render pattern already used for the equity curve).
+    Always uses the full trades list — intentionally independent of the
+    trade-history filter UI to keep scope minimal.
+    """
+    if not trades:
+        return '<p class="empty">거래 없음 — 첫 청산 후 표시됩니다</p>'
+
+    totals: dict[str, float] = {}
+    for t in trades:
+        sym = t.get("symbol", "-")
+        totals[sym] = totals.get(sym, 0.0) + float(t.get("pnl", 0.0))
+
+    if not totals:
+        return '<p class="empty">거래 없음</p>'
+
+    top_n = 8
+    ranked = sorted(totals.items(), key=lambda kv: abs(kv[1]), reverse=True)[:top_n]
+
+    values = [v for _, v in ranked]
+    max_val = max(max(values), 0.0)
+    min_val = min(min(values), 0.0)
+    v_range = max(max_val - min_val, 1.0)
+    max_abs = max(abs(max_val), abs(min_val), 1.0)
+
+    n = len(ranked)
+    W, H = 1000, 260
+    pad_l, pad_r, pad_t, pad_b = 82, 20, 40, 50
+    chart_w = W - pad_l - pad_r
+    chart_h = H - pad_t - pad_b
+    bar_w = max(24.0, chart_w / n - 16)
+    zero_y = pad_t + chart_h * max_val / v_range
+
+    parts: list[str] = [
+        f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" '
+        f'style="width:100%;height:auto;display:block">'
+    ]
+    parts.append(
+        f'<rect x="{pad_l}" y="{pad_t}" width="{chart_w}" height="{chart_h}" '
+        f'fill="#080e1a" rx="4"/>'
+    )
+
+    for factor in (-1.0, -0.5, 0.0, 0.5, 1.0):
+        line_v = factor * max_abs
+        line_y = pad_t + chart_h * (max_val - line_v) / v_range
+        if not (pad_t <= line_y <= pad_t + chart_h):
+            continue
+        if factor == 0.0:
+            stroke, stroke_w, dash = "#334155", "1.5", ""
+        else:
+            stroke, stroke_w, dash = "#1e2d3d", "1", "5,3"
+        parts.append(
+            f'<line x1="{pad_l}" y1="{line_y:.1f}" x2="{W - pad_r}" y2="{line_y:.1f}" '
+            f'stroke="{stroke}" stroke-width="{stroke_w}" stroke-dasharray="{dash}"/>'
+        )
+        label_v = round(abs(line_v))
+        if label_v == 0:
+            lcolor, ltext = "#475569", "0"
+        else:
+            lcolor = "#10b981" if line_v > 0 else "#ef4444"
+            sign_ch = "+" if line_v > 0 else "-"
+            ltext = f"{sign_ch}₩{label_v:,}"
+        parts.append(
+            f'<text x="{pad_l - 8}" y="{line_y + 4.5:.1f}" fill="{lcolor}" '
+            f'font-size="13" text-anchor="end" font-family="system-ui,sans-serif">{ltext}</text>'
+        )
+
+    for i, (sym, v) in enumerate(ranked):
+        x = pad_l + (i + 0.5) * chart_w / n - bar_w / 2
+        color = "#10b981" if v >= 0 else "#ef4444"
+        bh = max(2.0, abs(v) / v_range * chart_h) if v != 0 else 2.0
+        y = zero_y - bh if v >= 0 else zero_y
+        parts.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
+            f'fill="{color}" rx="3" opacity="0.88"/>'
+        )
+        if bh > 20:
+            sign_ch = "+" if v >= 0 else ""
+            label_y = y - 7 if v >= 0 else y + bh + 15
+            parts.append(
+                f'<text x="{x + bar_w / 2:.1f}" y="{label_y:.1f}" fill="{color}" '
+                f'font-size="12" text-anchor="middle" font-weight="700" '
+                f'font-family="system-ui,sans-serif">{sign_ch}₩{round(v):,}</text>'
+            )
+        label = sym.split("/")[0] if "/" in sym else sym
+        parts.append(
+            f'<text x="{x + bar_w / 2:.1f}" y="{H - 16}" fill="#94a3b8" '
+            f'font-size="13" text-anchor="middle" '
+            f'font-family="system-ui,sans-serif">{label}</text>'
+        )
+
+    parts.append(
+        f'<text x="{pad_l}" y="24" fill="#94a3b8" font-size="15" font-weight="500" '
+        f'font-family="system-ui,sans-serif">심볼별 실현 손익 (상위 {n}개)</text>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _render_trade_filter_bar(trades: list[dict]) -> str:
+    """Static filter controls (기간/종목/승패) shown above the position/buy/sell tabs.
+
+    Filtering itself happens client-side only (_filterTrades() in the JS below)
+    against already-fetched trade data — this function only renders the initial
+    server-side markup, including symbol <option>s seeded from the first-paint
+    trades list so the dropdown isn't empty before JS runs.
+    """
+    symbols = sorted({t["symbol"] for t in trades if t.get("symbol")})
+    symbol_options = "".join(f'<option value="{s}">{s}</option>' for s in symbols)
+    return f"""<select id="filter-period" onchange="applyTradeFilters()">
+      <option value="all">전체 기간</option>
+      <option value="7">최근 7일</option>
+      <option value="30">최근 30일</option>
+      <option value="90">최근 90일</option>
+    </select>
+    <select id="filter-symbol" onchange="applyTradeFilters()">
+      <option value="all">전체 종목</option>
+      {symbol_options}
+    </select>
+    <select id="filter-result" onchange="applyTradeFilters()">
+      <option value="all">전체</option>
+      <option value="win">승</option>
+      <option value="loss">패</option>
+    </select>"""
 
 
 def _render_positions(positions: list[dict]) -> str:

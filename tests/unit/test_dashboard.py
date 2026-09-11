@@ -319,6 +319,58 @@ class TestRenderDashboard:
         assert "cdnjs.cloudflare" not in html
         assert "unpkg.com" not in html
 
+    # ── UX improvements: trade filters / symbol P&L chart / theme toggle ──────
+
+    def _trade(self, symbol: str = "BTC/KRW", pnl: float = 100_000.0, is_win: bool = True) -> dict:
+        return {
+            "symbol": symbol,
+            "amount": 0.01,
+            "entry_price": 50_000_000.0,
+            "entry_time": "2026-09-01T10:00:00",
+            "exit_price": 51_000_000.0,
+            "exit_time": "2026-09-02T10:00:00",
+            "pnl": pnl,
+            "pnl_pct": 2.0,
+            "is_win": is_win,
+            "reason": "take_profit",
+        }
+
+    def test_html_trade_filter_controls_present(self) -> None:
+        html = render_dashboard(self._status(), [], {}, trades=[self._trade()])
+        assert 'id="filter-period"' in html
+        assert 'id="filter-symbol"' in html
+        assert 'id="filter-result"' in html
+        assert "function applyTradeFilters()" in html
+        assert "function _filterTrades(trades)" in html
+        assert "function _populateSymbolFilter(trades)" in html
+
+    def test_html_trade_filter_symbol_options_seeded_from_trades(self) -> None:
+        html = render_dashboard(
+            self._status(), [], {}, trades=[self._trade(symbol="ETH/KRW")]
+        )
+        assert '<option value="ETH/KRW">ETH/KRW</option>' in html
+
+    def test_html_symbol_pnl_chart_present(self) -> None:
+        trades = [self._trade(symbol="BTC/KRW", pnl=100_000.0), self._trade(symbol="ETH/KRW", pnl=-50_000.0)]
+        html = render_dashboard(self._status(), [], {}, trades=trades)
+        assert "심볼별 손익 비교" in html
+        assert 'id="symbol-pnl-wrap"' in html
+        assert "function renderSymbolPnl(trades)" in html
+        assert "<svg" in html  # chart actually rendered, not just empty-state text
+
+    def test_html_symbol_pnl_chart_empty_state(self) -> None:
+        html = render_dashboard(self._status(), [], {}, trades=[])
+        assert "심볼별 손익 비교" in html
+        assert "거래 없음" in html
+
+    def test_html_theme_toggle_present(self) -> None:
+        html = render_dashboard(self._status(), [], {})
+        assert 'id="theme-toggle"' in html
+        assert 'onclick="toggleTheme()"' in html
+        assert "function toggleTheme()" in html
+        assert "data-theme" in html
+        assert "dashboard-theme" in html  # localStorage key
+
 
 # ── FastAPI routes ─────────────────────────────────────────────────────────────
 
