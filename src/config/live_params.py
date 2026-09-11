@@ -73,7 +73,7 @@ PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "sm_adx_threshold":     (20.0, 35.0),
     "sl_floor_pct":         (2.0, 4.0),
     "sl_ceiling_pct":       (1.0, 2.0),
-    "atr_multiplier":       (1.5, 3.0),
+    "atr_multiplier":       (1.5, 4.0),
     "tp_rr_multiplier":     (1.2, 3.0),
 }
 
