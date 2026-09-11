@@ -22,7 +22,15 @@ KST = timezone(timedelta(hours=9))
 _ROOT = Path(__file__).parent.parent.parent
 PARAMS_FILE = _ROOT / ".strategy_params.json"
 AUDIT_LOG = _ROOT / "reports" / "param_change_log.jsonl"
-RESTART_FLAG = _ROOT / ".restart_requested"
+
+# reports/ is volume-mounted and owned by the container's runtime user (see
+# docker-compose.yml) — unlike _ROOT itself, which is baked into the image as
+# root during build, so a plain "_ROOT / '.restart_requested'" path raised
+# PermissionError the first time request_restart() actually ran in production
+# (apply_pending() had never reached this line before a change cleared the
+# performance gate). reports/ already holds the other pending/audit state
+# files below, so this keeps all runtime-mutable state in one writable place.
+RESTART_FLAG = _ROOT / "reports" / ".restart_requested"
 # 자동튜너가 제안한 변경 후보 — src/backtest/performance_gate.py 검증을 통과
 # (scripts/validate_params.py --apply)하기 전까지는 여기 머무를 뿐 .strategy_
 # params.json 에는 절대 반영되지 않는다. propose_and_apply()와 달리 이쪽은
