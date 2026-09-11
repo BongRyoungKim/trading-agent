@@ -302,8 +302,13 @@ class TestRenderDashboard:
     def test_html_pnl_section(self) -> None:
         pnl = {"cash": 9500.0, "realized_pnl": -500.0, "unrealized_pnl": 100.0, "open_positions": 1}
         html = render_dashboard(self._status(), [], pnl)
-        assert "9,500.00" in html
-        assert "-500.00" in html
+        assert "₩9,500" in html
+        assert "-₩500" in html
+        # 일시정지/재개 버튼은 최초 로드(SSR)에도 있어야 한다 — JS refresh() 전까지
+        # 버튼이 아예 없다가 나타나는 깜빡임(SSR/CSR 마크업 불일치)을 막는 회귀 테스트
+        assert 'class="pnl-grid"' in html
+        assert "일시정지" in html
+        assert "재개" in html
 
     def test_html_signal_row_click_opens_upbit(self) -> None:
         """신호평가 목록 행 클릭 시 새 창으로 업비트 해당 코인 페이지로 이동해야 한다."""
@@ -370,6 +375,142 @@ class TestRenderDashboard:
         assert "function toggleTheme()" in html
         assert "data-theme" in html
         assert "dashboard-theme" in html  # localStorage key
+
+    # ── 라이트/다크 팔레트 회귀 테스트 ──────────────────────────────────────
+    # 배경/카드/시그널/차트 색까지 전면 CSS 변수로 이관하기 전에는, 다크 테마를
+    # 전제로 하드코딩된 텍스트색(#f1f5f9, #94a3b8, #64748b, #475569, #cbd5e1 등)이
+    # 라이트 테마의 밝은 배경 위에서 대비가 사라져 텍스트가 보이지 않는 버그가 있었다.
+    # 아래 테스트들은 그 하드코딩이 다시 섞여 들어오는 것을 막는 회귀 가드다.
+
+    def test_html_no_hardcoded_dark_only_text_colors(self) -> None:
+        html = render_dashboard(
+            self._status(),
+            positions=[{
+                "symbol": "BTC/USDT", "side": "buy", "amount": 0.01,
+                "entry_price": 50000.0, "stop_loss": 48000.0, "take_profit": None,
+            }],
+            pnl={"cash": 9500.0, "realized_pnl": -500.0, "unrealized_pnl": 100.0},
+            trades=[self._trade()],
+            stats={"total_trades": 10, "win_rate_pct": 60.0, "profit_factor": 1.5,
+                   "avg_win": 100.0, "avg_loss": -50.0, "total_pnl": 500.0},
+            balance=[{"currency": "BTC", "free": 0.01, "used": 0.0, "price": 50000.0,
+                      "avg_buy_price": 48000.0, "buy_amount": 480.0, "eval_amount": 500.0}],
+        )
+        # 다크 배경을 전제로 한 하드코딩 텍스트/배경색 — 전부 var(--...)로 이관되어야 한다
+        hardcoded_dark_colors = [
+            "color:#f1f5f9", "color:#94a3b8", "color:#64748b", "color:#475569",
+            "color:#cbd5e1", "color:#60a5fa", "color:#a78bfa", "color:#38bdf8",
+            "color:#334155", "color:#3d5060", "color:#34d399", "color:#f87171",
+            "background:#0f172a", "background:#10b98120", "background:#ef444425",
+        ]
+        for pattern in hardcoded_dark_colors:
+            assert pattern not in html, f"하드코딩 다크 전제 색상이 재발함: {pattern}"
+
+    def test_html_theme_variables_include_signal_and_chart_tokens(self) -> None:
+        html = render_dashboard(self._status(), [], {})
+        for token in (
+            "--signal-buy", "--signal-buy-bg", "--signal-sell", "--signal-sell-bg",
+            "--signal-warn", "--signal-warn-bg", "--accent", "--accent-bg",
+            "--chart-bg", "--chart-grid", "--chart-grid-soft", "--chart-highlight",
+        ):
+            assert token in html
+
+    def test_html_criteria_row_uses_theme_variable_not_hardcoded_hex(self) -> None:
+        html = render_dashboard(self._status(), [], {})
+        assert ".criteria-row{" in html
+        assert "color:var(--text)" in html
+
+    def test_html_buttons_use_signal_variables_not_raw_hex(self) -> None:
+        html = render_dashboard(self._status(), [], {})
+        assert ".btn-pause{" in html
+        assert "background:#f59e0b" not in html
+        assert "background:#10b981" not in html
+        assert "background:#6366f1" not in html
+        assert "var(--signal-warn)" in html
+        assert "var(--signal-buy)" in html
+
+    def test_html_balance_card_neutral_state_uses_theme_variable(self) -> None:
+        """잔고 카드 '정보 없음'(손익 계산 불가) 상태가 다크 전제 고정 배경(#0f172a) 대신
+        var(--bg-inset)를 쓰는지 확인한다 — 라이트 테마에서 카드 하나만 검게 떠 보이던 버그."""
+        html = render_dashboard(
+            self._status(), [], {},
+            balance=[{"currency": "KRW", "free": 500000.0, "used": 0.0, "price": 1.0,
+                      "avg_buy_price": 0.0, "buy_amount": 0, "eval_amount": 500000}],
+        )
+        assert "KRW" in html
+        assert "background:#0f172a" not in html
+
+    # ── 이모지 → 절제된 라인 아이콘 교체 회귀 테스트 ───────────────────────
+    def test_html_replaces_target_emojis_with_svg_icons(self) -> None:
+        html = render_dashboard(self._status(), [], {})
+        for removed_emoji in ("⚡", "📋", "🔒", "🌙", "☀", "✅", "❌"):
+            assert removed_emoji not in html, f"교체 대상 이모지가 남아있음: {removed_emoji}"
+        # 대체된 아이콘은 stroke=currentColor 기반 인라인 SVG여야 한다(외부 아이콘 폰트 금지)
+        assert 'stroke="currentColor"' in html
+
+    def test_html_retains_out_of_scope_unicode_glyphs(self) -> None:
+        """⏸▶✖ 은 이번 교체 범위 밖(이미 절제된 기호)이라 그대로 유지되어야 한다."""
+        html = render_dashboard(self._status(), [], {})
+        assert "⏸" in html
+        assert "▶" in html
+
+    # ── 전략 파라미터 & 신호 기준 패널 재설계 회귀 테스트 ──────────────────
+    def test_html_strategy_panel_uses_unified_badge_vocabulary(self) -> None:
+        """매수/매도 조건 배지 라벨 체계를 통일한다 — 매도 쪽도 매수와 같은 지표
+        약어(EMA/MACD)를 쓰고 방향만 ↓ 접미사로 구분한다(구 '데스크로스' 라벨 제거)."""
+        html = render_dashboard(self._status(), [], {})
+        assert "function renderStrategy(s)" in html
+        assert "'EMA↓'" in html
+        assert "'MACD↓'" in html
+        assert "sellPillLabels" not in html  # 구버전 별도 라벨 배열은 제거됨
+
+    def test_html_strategy_panel_criteria_row_is_grid_layout(self) -> None:
+        """배지/조건식/설명 열 폭을 고정한 그리드 정렬로 바뀌었는지 확인한다."""
+        html = render_dashboard(self._status(), [], {})
+        assert "grid-template-columns:52px minmax(0,190px) 1fr" in html
+
+    # ── SSR/CSR 마크업 동기화 회귀 테스트 ──────────────────────────────────
+    # Python _render_*()(최초 로드)와 JS render*()(refresh())가 서로 다른 마크업을
+    # 내면, 페이지를 열자마자 구 레이아웃이 잠깐 보였다가 refresh() 시점에 새
+    # 레이아웃으로 바뀌는 깜빡임이 생긴다. 아래 테스트들은 SSR 결과물이 CSR과
+    # 동일한 구조(클래스명)를 쓰는지 고정해 재발을 막는다.
+
+    def test_html_status_card_matches_js_structure(self) -> None:
+        """엔진 상태 카드는 배지(.badge) 목록이 아니라 renderStatus()(JS)와 동일한
+        .status-box 2열 그리드 + 서킷 브레이커 행 구조여야 한다."""
+        html = render_dashboard(self._status(), [], {})
+        assert 'class="status-box"' in html
+        assert html.count('class="status-box"') >= 2  # 모드 박스 + 상태 박스
+        assert "서킷 브레이커" in html
+
+    def test_html_stats_card_matches_js_structure(self) -> None:
+        """성과 분석 카드는 renderStats()(JS)와 동일하게 .stats-flex(큰 승률) +
+        .stat-box-grid(4박스) 구조여야 한다 — 구 .stats-grid(5박스 한 줄)는 제거됨."""
+        html = render_dashboard(
+            self._status(), [], {},
+            stats={"total_trades": 10, "win_rate_pct": 60.0, "profit_factor": 1.5,
+                   "avg_win": 100.0, "avg_loss": -50.0, "total_pnl": 500.0},
+        )
+        assert 'class="stats-flex"' in html
+        assert 'class="stat-box-grid"' in html
+        assert "stats-grid" not in html  # 클래스 자체가 제거됨(더 이상 아무도 안 씀)
+        assert 'class="wr-bar"' in html
+
+    def test_html_stats_card_empty_state_when_zero_trades(self) -> None:
+        """거래가 0건이면 JS(renderStats)처럼 빈 상태 메시지를 보여야 한다 —
+        기존엔 Python 쪽이 total_trades==0 체크를 안 해 0%/0.00 박스가 그려졌다."""
+        html = render_dashboard(self._status(), [], {}, stats={"total_trades": 0})
+        assert "거래 없음" in html
+
+    def test_html_pnl_card_matches_js_structure(self) -> None:
+        """포트폴리오 카드는 renderPnl()(JS)과 동일하게 .pnl-grid 3박스 +
+        일시정지/재개 버튼을 최초 로드(SSR)부터 포함해야 한다."""
+        html = render_dashboard(
+            self._status(), [], {"cash": 9500.0, "realized_pnl": -500.0, "unrealized_pnl": 100.0},
+        )
+        assert 'class="pnl-grid"' in html
+        assert 'class="btn-pause"' in html
+        assert 'class="btn-resume"' in html
 
 
 # ── FastAPI routes ─────────────────────────────────────────────────────────────
