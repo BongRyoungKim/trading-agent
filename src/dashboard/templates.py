@@ -146,6 +146,9 @@ def render_dashboard(
       --signal-warn:#d99a3d;--signal-warn-bg:rgba(217,154,61,.12);
       --accent:#5b8def;--accent-bg:rgba(91,141,239,.14);
       --chart-bg:#0a0d13;--chart-grid:#2a3242;--chart-grid-soft:#1c222e;--chart-highlight:rgba(255,255,255,.04);
+      /* 차트 막대 전용 시그널 색 — 구조적 UI(버튼/배지)는 절제된 --signal-*를 쓰고,
+         데이터 시각화(막대 그래프)만 어두운 배경 위에서 도드라지도록 채도/명도를 올린다 */
+      --chart-buy:#16c784;--chart-sell:#ea3943;
       /* 타이포그래피 스케일 (7단계) + font-weight 3단계 — 페이지 전체에서 이 토큰만 사용 */
       --fs-1:.6875rem;--fs-2:.75rem;--fs-3:.8125rem;--fs-4:.875rem;--fs-5:1rem;--fs-6:1.25rem;--fs-7:1.1875rem;
       --fw-regular:400;--fw-medium:600;--fw-strong:700;
@@ -158,6 +161,7 @@ def render_dashboard(
       --signal-warn:#a3690b;--signal-warn-bg:rgba(163,105,11,.10);
       --accent:#3550b3;--accent-bg:rgba(53,80,179,.10);
       --chart-bg:#e7e9ed;--chart-grid:#c7cbd3;--chart-grid-soft:#d7dae0;--chart-highlight:rgba(0,0,0,.05);
+      --chart-buy:#0fae6e;--chart-sell:#d92d3a;
     }}
     body{{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:var(--fs-3);min-height:100vh}}
     header{{background:var(--card-bg);border-bottom:1px solid var(--border);padding:1rem 2rem;display:flex;align-items:center;justify-content:space-between}}
@@ -207,14 +211,19 @@ def render_dashboard(
     .criteria-grid{{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-top:.6rem}}
     .criteria-col h3{{font-size:var(--fs-1);font-weight:var(--fw-strong);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem}}
     .criteria-col h3.buy{{color:var(--signal-buy)}}.criteria-col h3.sell{{color:var(--signal-sell)}}
-    .criteria-row{{display:grid;grid-template-columns:52px minmax(0,190px) 1fr;column-gap:.6rem;align-items:baseline;padding:.28rem 0;font-size:var(--fs-3);color:var(--text)}}
+    /* 배지(고정폭) | 조건식(1행)+설명(2행) 2열 그리드. 조건식·설명을 같은 줄에 나란히
+       두면(구버전) 길이가 다른 항목끼리 줄바꿈 위치가 들쭉날쭉해져서, 조건식/설명을
+       세로로 always 분리한다 — 배지 | 조건식(줄1) / 설명(줄2) 형태 고정. */
+    .criteria-row{{display:grid;grid-template-columns:58px 1fr;column-gap:.6rem;align-items:start;padding:.32rem 0;font-size:var(--fs-3);color:var(--text)}}
     /* 그리드 아이템의 기본 min-width:auto(콘텐츠 기준)를 0으로 낮춰, 조건식/설명 텍스트가
-       트랙 폭보다 길 때 카드 밖으로 넘치지 않고 트랙 안에서 줄바꿈되게 한다.
-       justify-self:start는 grid 기본값(stretch)이 배지(.cp)를 트랙 폭까지 강제로
-       늘려 배경/테두리 박스가 "MACD↓" 같은 라벨 끝부분을 잘라먹는 것을 막는다. */
+       트랙 폭보다 길 때 카드 밖으로 넘치지 않고 트랙 안에서 줄바꿈되게 한다. */
     .criteria-row > *{{min-width:0;justify-self:start}}
-    .criteria-row code{{font-size:var(--fs-3);white-space:normal;word-break:keep-all}}
-    .criteria-row .desc{{color:var(--text-muted);font-size:var(--fs-2)}}
+    /* 배지 폭을 글자 수와 무관하게 고정(56~60px) — 이전엔 justify-self:start 때문에
+       "EMA"(짧음)와 "MACD"(김)가 서로 다른 폭으로 보였다. 여기서만 폭을 명시해 나머지
+       틱 패널 등 다른 곳의 .cp(짧은 단일/이중 글자 pill)에는 영향 없게 범위를 좁힌다. */
+    .criteria-row .cp{{width:58px;text-align:center}}
+    .criteria-row .cond-line code{{display:block;font-size:var(--fs-3);white-space:normal;word-break:keep-all}}
+    .criteria-row .desc{{display:block;color:var(--text-muted);font-size:var(--fs-1);margin-top:.15rem}}
     /* 파라미터 pill — 연관 파라미터끼리 구분선으로 그룹핑, Timeframe은 메타값이라 별도 톤(액센트) */
     .param-group{{display:inline-flex;align-items:center;flex-wrap:wrap;gap:.3rem;padding-right:.6rem;margin:.15rem .6rem .15rem 0;border-right:1px solid var(--border)}}
     .param-group:last-of-type{{border-right:none;margin-right:0;padding-right:0}}
@@ -265,8 +274,6 @@ def render_dashboard(
       .stats-flex{{grid-template-columns:1fr;gap:.9rem}}
       .stat-box-grid{{grid-template-columns:1fr 1fr}}
       .criteria-grid{{grid-template-columns:1fr;gap:1.2rem}}
-      /* 좁은 화면에서는 배지/조건식 열 폭을 줄여 설명 텍스트가 잘리지 않게 한다 */
-      .criteria-row{{grid-template-columns:44px minmax(0,108px) 1fr;column-gap:.4rem}}
       .stat-box .val{{font-size:1.05rem}}
       /* 표는 컬럼이 많아 그대로 찌그러지면 못 읽으므로, 최소 너비를 줘서
          좁은 화면에서는 컬럼 폭을 유지한 채 옆으로 스크롤하게 만든다 */
@@ -474,13 +481,16 @@ function renderStrategy(s) {{
     ['MACD↓', 'MACD histogram', '양 → 음 전환, EMA 위에서'],
   ];
 
-  // 배지(고정폭) | 조건식(고정폭) | 설명 — 3열 그리드(.criteria-row)라 길이가
-  // 제각각인 조건식이 있어도 설명 텍스트 시작 위치가 행마다 어긋나지 않는다.
+  // 배지(고정폭 58px, 글자 수 무관) | 조건식(1행)+설명(2행) — 조건식과 설명을 같은
+  // 줄에 나란히 두면 길이가 제각각일 때 줄바꿈 위치가 들쭉날쭉해지므로, 항상
+  // "조건식 줄 / 설명 줄"로 세로 분리해 고정한다.
   const mkRows = (arr, cls) => arr.map(([lbl, cond, desc]) =>
     `<div class="criteria-row">
       <span class="cp ${{cls}}">${{lbl}}</span>
-      <code>${{cond}}</code>
-      <span class="desc">${{desc}}</span>
+      <div>
+        <div class="cond-line"><code>${{cond}}</code></div>
+        <div class="desc">${{desc}}</div>
+      </div>
     </div>`
   ).join('');
 
@@ -1066,8 +1076,24 @@ function renderEquity(pts) {{
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
   const n = allDates.length;
-  const barW = Math.max(9, chartW / n - 3);
+  // 막대:간격 = 약 62:38 (업계 관례 60~70% 막대) — 슬롯(중심 간 거리)의 62%를 막대
+  // 폭으로 쓰되, 데이터가 적을 때(2~3개) 과도하게 두꺼워지지 않도록 상한(64px)을,
+  // 30개까지 촘촘해져도 너무 가늘어지지 않도록 하한(6px)을 둔다.
+  const slot = chartW / n;
+  const barW = Math.min(Math.max(slot * 0.62, 6), 64);
   const zeroY = padT + chartH * maxVal / range;
+
+  // 막대 값 라벨 겹침 방지: 막대 중심 간 실제 간격(slot)이 라벨 예상 폭보다 좁으면
+  // (예: 실거래 30일치처럼 막대가 촘촘한 경우) 개별 막대 라벨을 전부 생략하고,
+  // 우측 상단의 월 합계 숫자만 크게 보여준다 — 더미 2~3개 막대로만 검증해서
+  // 놓쳤던 문제라, 실제 규모(30일)로 반드시 재확인한다.
+  const equityLabelTexts = allDates.map(d => {{
+    const v = dailyByDate[d];
+    const sign = v >= 0 ? '+' : '';
+    return `${{sign}}₩${{Math.round(v).toLocaleString('ko-KR')}}`;
+  }});
+  const maxEquityLabelLen = Math.max(...equityLabelTexts.map(t => t.length), 0);
+  const showBarLabels = slot >= maxEquityLabelLen * 7 + 6;
 
   let svgParts = [];
 
@@ -1092,7 +1118,7 @@ function renderEquity(pts) {{
       svgParts.push(`<line x1="${{padL}}" y1="${{lineY.toFixed(1)}}" x2="${{W-padR}}" y2="${{lineY.toFixed(1)}}" stroke="var(--chart-grid)" stroke-width="1" stroke-dasharray="${{isZero ? '4' : '2'}}"/>`);
       const labelV = Math.round(Math.abs(lineV));
       const sign = lineV > 0 ? '+' : (lineV < 0 ? '-' : '');
-      const labelColor = lineV > 0 ? 'var(--signal-buy)' : (lineV < 0 ? 'var(--signal-sell)' : 'var(--text-dim)');
+      const labelColor = lineV > 0 ? 'var(--chart-buy)' : (lineV < 0 ? 'var(--chart-sell)' : 'var(--text-dim)');
       const labelText = isZero ? '0' : `${{sign}}₩${{labelV.toLocaleString('ko-KR')}}`;
       svgParts.push(`<text x="${{padL-6}}" y="${{(lineY+4).toFixed(1)}}" fill="${{labelColor}}" font-size="13" text-anchor="end" font-family="system-ui,sans-serif">${{labelText}}</text>`);
     }}
@@ -1102,14 +1128,14 @@ function renderEquity(pts) {{
   allDates.forEach((date, i) => {{
     const v = dailyByDate[date];
     const x = padL + (i + 0.5) * chartW / n - barW / 2;
-    const color = v >= 0 ? 'var(--signal-buy)' : 'var(--signal-sell)';
+    const color = v >= 0 ? 'var(--chart-buy)' : 'var(--chart-sell)';
     const barH = v !== 0 ? Math.max(1, Math.abs(v) / range * chartH) : 1;
     const barColor = v !== 0 ? color : 'var(--chart-grid)';
     const opacity = date === todayStr ? '1.0' : '0.82';
     const y = v >= 0 ? zeroY - barH : zeroY;
     svgParts.push(`<rect x="${{x.toFixed(1)}}" y="${{y.toFixed(1)}}" width="${{barW.toFixed(1)}}" height="${{barH.toFixed(1)}}" fill="${{barColor}}" rx="2" opacity="${{opacity}}"/>`);
 
-    if (barH > 16 && v !== 0) {{
+    if (showBarLabels && barH > 16 && v !== 0) {{
       const sign = v >= 0 ? '+' : '';
       const labelY = v >= 0 ? y - 4 : y + barH + 12;
       svgParts.push(`<text x="${{(x+barW/2).toFixed(1)}}" y="${{labelY.toFixed(1)}}" fill="${{color}}" font-size="12" text-anchor="middle" font-weight="600" font-family="system-ui,sans-serif">${{sign}}₩${{Math.round(v).toLocaleString('ko-KR')}}</text>`);
@@ -1125,7 +1151,7 @@ function renderEquity(pts) {{
   // 월 제목 + 월 합계 (오늘까지의 일별 손익 합산)
   const totalPnl = allDates.filter(d => d <= todayStr).reduce((s, d) => s + dailyByDate[d], 0);
   const totalSign = totalPnl >= 0 ? '+' : '';
-  const totalColor = totalPnl >= 0 ? 'var(--signal-buy)' : 'var(--signal-sell)';
+  const totalColor = totalPnl >= 0 ? 'var(--chart-buy)' : 'var(--chart-sell)';
   svgParts.push(`<text x="${{padL}}" y="22" fill="var(--text-muted)" font-size="15" font-family="system-ui,sans-serif">${{yyyy}}년 ${{parseInt(mm)}}월 일별 손익</text>`);
   svgParts.push(`<text x="${{W-padR}}" y="26" fill="${{totalColor}}" font-size="20" text-anchor="end" font-weight="700" font-family="system-ui,sans-serif">${{totalSign}}₩${{Math.round(totalPnl).toLocaleString('ko-KR')}}</text>`);
 
@@ -1154,8 +1180,24 @@ function renderSymbolPnl(trades) {{
   const n = ranked.length;
   const W = 1000, H = 260, padL = 82, padR = 20, padT = 40, padB = 50;
   const chartW = W - padL - padR, chartH = H - padT - padB;
-  const barW = Math.max(24, chartW / n - 16);
+  // 막대:간격 ≈ 62:38(업계 관례), 심볼 수가 적을 때(2~3개) 과도하게 두꺼워지지
+  // 않도록 상한을, 8~10개로 촘촘할 때도 너무 가늘어지지 않도록 하한을 둔다.
+  const symSlot = chartW / n;
+  const barW = Math.min(Math.max(symSlot * 0.62, 20), 90);
   const zeroY = padT + chartH * maxVal / range;
+
+  // 막대 값 라벨 겹침 방지 — 실제 8개 심볼 규모에서 라벨끼리 겹치던 문제를
+  // 픽셀 단위로 재확인하고, 슬롯 폭이 라벨 예상 폭보다 좁으면 전부 생략한다.
+  const symLabelTexts = ranked.map(([, v]) => {{
+    const sign = v >= 0 ? '+' : '';
+    return `${{sign}}₩${{Math.round(v).toLocaleString('ko-KR')}}`;
+  }});
+  const maxSymLabelLen = Math.max(...symLabelTexts.map(t => t.length), 0);
+  // 픽셀 추정만으로는 폰트/브라우저 렌더링 차이에 따라 실제로 겹치는 경우가 있어,
+  // 심볼이 6개 이상(상위 8개까지 나올 수 있음)일 때는 보수적으로 항상 생략한다
+  // (실사용에서 의미 있게 여러 개가 동시에 뜨는 건 보통 소수 심볼이라 3~5개까지는
+  // 라벨을 유지해도 안전하다).
+  const showSymBarLabels = symSlot >= maxSymLabelLen * 7 + 6 && n <= 5;
 
   const parts = [];
   parts.push(`<rect x="${{padL}}" y="${{padT}}" width="${{chartW}}" height="${{chartH}}" fill="var(--chart-bg)" rx="4"/>`);
@@ -1169,7 +1211,7 @@ function renderSymbolPnl(trades) {{
     const dash = isZero ? '' : '5,3';
     parts.push(`<line x1="${{padL}}" y1="${{lineY.toFixed(1)}}" x2="${{W-padR}}" y2="${{lineY.toFixed(1)}}" stroke="${{stroke}}" stroke-width="${{isZero?1.5:1}}" stroke-dasharray="${{dash}}"/>`);
     const labelV = Math.round(Math.abs(lineV));
-    const lcolor = labelV===0 ? 'var(--text-dim)' : (lineV>0?'var(--signal-buy)':'var(--signal-sell)');
+    const lcolor = labelV===0 ? 'var(--text-dim)' : (lineV>0?'var(--chart-buy)':'var(--chart-sell)');
     const sign = labelV===0 ? '' : (lineV>0?'+':'-');
     const ltext = labelV===0 ? '0' : `${{sign}}₩${{labelV.toLocaleString('ko-KR')}}`;
     parts.push(`<text x="${{padL-8}}" y="${{(lineY+4.5).toFixed(1)}}" fill="${{lcolor}}" font-size="13" text-anchor="end" font-family="system-ui,sans-serif">${{ltext}}</text>`);
@@ -1177,11 +1219,11 @@ function renderSymbolPnl(trades) {{
 
   ranked.forEach(([sym, v], i) => {{
     const x = padL + (i + 0.5) * chartW / n - barW / 2;
-    const color = v >= 0 ? 'var(--signal-buy)' : 'var(--signal-sell)';
+    const color = v >= 0 ? 'var(--chart-buy)' : 'var(--chart-sell)';
     const bh = v !== 0 ? Math.max(2, Math.abs(v) / range * chartH) : 2;
     const y = v >= 0 ? zeroY - bh : zeroY;
     parts.push(`<rect x="${{x.toFixed(1)}}" y="${{y.toFixed(1)}}" width="${{barW.toFixed(1)}}" height="${{bh.toFixed(1)}}" fill="${{color}}" rx="3" opacity="0.88"/>`);
-    if (bh > 20) {{
+    if (showSymBarLabels && bh > 20) {{
       const sign = v >= 0 ? '+' : '';
       const labelY = v >= 0 ? y - 7 : y + bh + 15;
       parts.push(`<text x="${{(x+barW/2).toFixed(1)}}" y="${{labelY.toFixed(1)}}" fill="${{color}}" font-size="12" text-anchor="middle" font-weight="700" font-family="system-ui,sans-serif">${{sign}}₩${{Math.round(v).toLocaleString('ko-KR')}}</text>`);
@@ -1489,9 +1531,23 @@ def _render_equity_svg(equity: list[dict]) -> str:
     chart_w = W - pad_l - pad_r
     chart_h = H - pad_t - pad_b
     n = len(all_dates)
-    bar_w = max(9.0, chart_w / n - 4)
+    # 막대:간격 ≈ 62:38(업계 관례 60~70% 막대) — 슬롯(중심 간 거리)의 62%를 막대 폭으로
+    # 쓰되, 데이터가 적을 때 과도하게 두꺼워지지 않도록 상한(64px)을, 30개까지
+    # 촘촘해져도 너무 가늘어지지 않도록 하한(6px)을 둔다.
+    slot = chart_w / n
+    bar_w = min(max(slot * 0.62, 6.0), 64.0)
     zero_y = pad_t + chart_h * max_val / v_range
     today_str = today.strftime("%Y-%m-%d")
+
+    # 막대 값 라벨 겹침 방지 — 막대 중심 간 실제 간격(slot)이 라벨 예상 폭보다
+    # 좁으면(실거래 30일치처럼 촘촘한 경우) 개별 막대 라벨을 전부 생략하고
+    # 우측 상단 월 합계 숫자만 보여준다.
+    def _equity_label(v: float) -> str:
+        sign_ch = "+" if v >= 0 else ""
+        return f"{sign_ch}₩{round(v):,}"
+
+    max_equity_label_len = max((len(_equity_label(daily[d])) for d in all_dates), default=0)
+    show_bar_labels = slot >= max_equity_label_len * 7 + 6
 
     parts: list[str] = [
         f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" '
@@ -1523,7 +1579,7 @@ def _render_equity_svg(equity: list[dict]) -> str:
             lcolor = "var(--text-dim)"
             ltext = "0"
         else:
-            lcolor = "var(--signal-buy)" if line_v > 0 else "var(--signal-sell)"
+            lcolor = "var(--chart-buy)" if line_v > 0 else "var(--chart-sell)"
             sign_ch = "+" if line_v > 0 else "-"
             ltext = f"{sign_ch}₩{label_v:,}"
         parts.append(
@@ -1535,7 +1591,7 @@ def _render_equity_svg(equity: list[dict]) -> str:
     for i, d in enumerate(all_dates):
         v = daily[d]
         x = pad_l + (i + 0.5) * chart_w / n - bar_w / 2
-        color = "var(--signal-buy)" if v >= 0 else "var(--signal-sell)"
+        color = "var(--chart-buy)" if v >= 0 else "var(--chart-sell)"
         bh = max(2.0, abs(v) / v_range * chart_h) if v != 0 else 2.0
         bar_color = color if v != 0 else "var(--chart-grid)"
         y = zero_y - bh if v >= 0 else zero_y
@@ -1553,8 +1609,8 @@ def _render_equity_svg(equity: list[dict]) -> str:
             f'fill="{bar_color}" rx="2" opacity="{opacity}"/>'
         )
 
-        # 막대 위 값 레이블 (충분히 클 때)
-        if bh > 22 and v != 0:
+        # 막대 위 값 레이블 (충분히 클 때 + 라벨끼리 안 겹칠 때만)
+        if show_bar_labels and bh > 22 and v != 0:
             sign_ch = "+" if v >= 0 else ""
             label_y = y - 7 if v >= 0 else y + bh + 15
             parts.append(
@@ -1576,7 +1632,7 @@ def _render_equity_svg(equity: list[dict]) -> str:
 
     # 헤더: 월 제목 (좌) + 누적 합계 (우)
     total = sum(daily.get(d, 0.0) for d in all_dates if d <= today_str)
-    total_color = "var(--signal-buy)" if total >= 0 else "var(--signal-sell)"
+    total_color = "var(--chart-buy)" if total >= 0 else "var(--chart-sell)"
     sign_ch = "+" if total >= 0 else ""
     year, mon = today.year, today.month
     parts.append(
@@ -1625,8 +1681,22 @@ def _render_symbol_pnl_svg(trades: list[dict]) -> str:
     pad_l, pad_r, pad_t, pad_b = 82, 20, 40, 50
     chart_w = W - pad_l - pad_r
     chart_h = H - pad_t - pad_b
-    bar_w = max(24.0, chart_w / n - 16)
+    # 막대:간격 ≈ 62:38(업계 관례), 심볼 수가 적을 때 과도하게 두꺼워지지 않도록
+    # 상한을, 8개로 촘촘할 때도 너무 가늘어지지 않도록 하한을 둔다.
+    sym_slot = chart_w / n
+    bar_w = min(max(sym_slot * 0.62, 20.0), 90.0)
     zero_y = pad_t + chart_h * max_val / v_range
+
+    # 막대 값 라벨 겹침 방지 — 실제 8개 심볼 규모에서 라벨끼리 겹치던 문제를
+    # 슬롯 폭 대비 라벨 예상 폭으로 판단해 필요하면 전부 생략한다.
+    def _sym_label(v: float) -> str:
+        sign_ch = "+" if v >= 0 else ""
+        return f"{sign_ch}₩{round(v):,}"
+
+    max_sym_label_len = max((len(_sym_label(v)) for _, v in ranked), default=0)
+    # 픽셀 추정만으로는 폰트/브라우저 렌더링 차이로 실제 겹침이 남을 수 있어,
+    # 심볼이 6개 이상일 때는 보수적으로 항상 생략한다(3~5개까지는 라벨 유지).
+    show_sym_bar_labels = sym_slot >= max_sym_label_len * 7 + 6 and n <= 5
 
     parts: list[str] = [
         f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" '
@@ -1654,7 +1724,7 @@ def _render_symbol_pnl_svg(trades: list[dict]) -> str:
         if label_v == 0:
             lcolor, ltext = "var(--text-dim)", "0"
         else:
-            lcolor = "var(--signal-buy)" if line_v > 0 else "var(--signal-sell)"
+            lcolor = "var(--chart-buy)" if line_v > 0 else "var(--chart-sell)"
             sign_ch = "+" if line_v > 0 else "-"
             ltext = f"{sign_ch}₩{label_v:,}"
         parts.append(
@@ -1664,14 +1734,14 @@ def _render_symbol_pnl_svg(trades: list[dict]) -> str:
 
     for i, (sym, v) in enumerate(ranked):
         x = pad_l + (i + 0.5) * chart_w / n - bar_w / 2
-        color = "var(--signal-buy)" if v >= 0 else "var(--signal-sell)"
+        color = "var(--chart-buy)" if v >= 0 else "var(--chart-sell)"
         bh = max(2.0, abs(v) / v_range * chart_h) if v != 0 else 2.0
         y = zero_y - bh if v >= 0 else zero_y
         parts.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
             f'fill="{color}" rx="3" opacity="0.88"/>'
         )
-        if bh > 20:
+        if show_sym_bar_labels and bh > 20:
             sign_ch = "+" if v >= 0 else ""
             label_y = y - 7 if v >= 0 else y + bh + 15
             parts.append(

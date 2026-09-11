@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.dashboard.state import DashboardState, get_dashboard_state
-from src.dashboard.templates import render_dashboard
+from src.dashboard.templates import _render_equity_svg, _render_symbol_pnl_svg, render_dashboard
 
 
 # ── DashboardState ────────────────────────────────────────────────────────────
@@ -465,9 +465,24 @@ class TestRenderDashboard:
         assert "sellPillLabels" not in html  # 구버전 별도 라벨 배열은 제거됨
 
     def test_html_strategy_panel_criteria_row_is_grid_layout(self) -> None:
-        """배지/조건식/설명 열 폭을 고정한 그리드 정렬로 바뀌었는지 확인한다."""
+        """배지(고정폭) | 조건식·설명 2행 구조의 2열 그리드인지 확인한다."""
         html = render_dashboard(self._status(), [], {})
-        assert "grid-template-columns:52px minmax(0,190px) 1fr" in html
+        assert "grid-template-columns:58px 1fr" in html
+
+    def test_html_strategy_panel_badge_has_fixed_width(self) -> None:
+        """EMA/PROX/MACD 등 배지가 글자 수와 무관하게 고정 폭(.criteria-row .cp)을
+        갖는지 확인한다 — 이전엔 justify-self:start 때문에 배지 폭이 제각각이었다."""
+        html = render_dashboard(self._status(), [], {})
+        assert ".criteria-row .cp{width:58px" in html
+
+    def test_html_strategy_panel_condition_and_desc_are_stacked_lines(self) -> None:
+        """조건식(<code>)과 설명이 같은 줄에서 경합하지 않고, 항상 조건식(줄1) /
+        설명(줄2) 두 줄 구조로 분리되는지 확인한다(긴 설명 텍스트 포함)."""
+        html = render_dashboard(self._status(), [], {})
+        assert 'class="cond-line"' in html
+        assert '<div class="cond-line"><code>' in html
+        # 설명이 <code>와 같은 인라인 span이 아니라 별도 block div여야 줄이 분리된다
+        assert '.criteria-row .desc{display:block' in html
 
     # ── SSR/CSR 마크업 동기화 회귀 테스트 ──────────────────────────────────
     # Python _render_*()(최초 로드)와 JS render*()(refresh())가 서로 다른 마크업을
@@ -511,6 +526,87 @@ class TestRenderDashboard:
         assert 'class="pnl-grid"' in html
         assert 'class="btn-pause"' in html
         assert 'class="btn-resume"' in html
+
+    # ── 차트 회귀 테스트 (실거래 규모: 30일치 일별 손익 / 8개 심볼) ─────────
+    # 더미 2~3개 막대로만 검증해서 실거래 규모에서 라벨이 겹치는 문제를
+    # 놓쳤던 사고의 재발 방지 — 반드시 실제 규모(한 달 전체 일수, 8개 심볼)로
+    # 데이터를 만들어 검증한다.
+
+    # 막대 위 값 레이블에만 쓰이는 스타일 조합(축 눈금/총합/날짜·심볼 라벨과는 font-size
+    # + text-anchor + font-weight 조합이 겹치지 않는다) — 이 시그니처의 존재 여부로
+    # "막대별 라벨이 생략됐는지"를 축 라벨과 혼동 없이 판별한다.
+    _EQUITY_BAR_LABEL_STYLE = 'font-size="12" text-anchor="middle" font-weight="600"'
+    _SYMBOL_BAR_LABEL_STYLE = 'font-size="12" text-anchor="middle" font-weight="700"'
+
+    def test_html_equity_chart_full_month_suppresses_overlapping_bar_labels(self) -> None:
+        """실거래 규모(이번 달 전체 일수)로 막대가 촘촘해지면, 막대 중심 간 거리가
+        라벨 폭보다 좁아지므로 막대별 값 라벨은 생략되고 우측 상단 합계만 남아야
+        한다(더미 2~3개 막대로만 검증해 겹침을 놓쳤던 문제의 회귀 테스트)."""
+        import calendar
+        from datetime import date
+
+        today = date.today()
+        last_day = calendar.monthrange(today.year, today.month)[1]
+        equity = [
+            {
+                "time": f"{today.year:04d}-{today.month:02d}-{d:02d}T00:00:00",
+                "pnl": 4227.0 if d % 2 == 0 else -5262.0,
+            }
+            for d in range(1, last_day + 1)
+        ]
+        svg = _render_equity_svg(equity)
+        assert self._EQUITY_BAR_LABEL_STYLE not in svg
+        # 우측 상단 합계(월 누적)는 계속 보여야 한다
+        assert "text-anchor=\"end\" font-weight=\"800\"" in svg
+
+    def test_html_equity_chart_always_spans_full_month(self) -> None:
+        """equity 차트는 거래가 하루치만 있어도 이번 달 전체 일수(28~31개) 막대를
+        그린다 — 즉 '막대 수가 적은 경우'가 구조적으로 존재하지 않으므로, 라벨
+        생략 로직이 항상 이 규모를 전제로 동작하는지(과도하게 숨기지 않는지)
+        아주 짧은 라벨(한 자릿수 원)로 확인한다."""
+        from datetime import date
+
+        today = date.today()
+        equity = [{"time": f"{today.isoformat()}T00:00:00", "pnl": 5.0}]
+        svg = _render_equity_svg(equity)
+        assert "+₩5" in svg  # 축 눈금/합계 어딘가엔 반드시 나타남
+
+    def test_html_symbol_pnl_chart_eight_symbols_suppresses_overlapping_labels(self) -> None:
+        """실거래 규모(8개 심볼)로 막대가 촘촘해지면 값 라벨 겹침을 피하기 위해
+        막대별 라벨을 생략해야 한다(더미 2개 심볼로만 검증해 놓쳤던 문제의 회귀 테스트)."""
+        trades = [
+            self._trade(symbol=f"SYM{i}/KRW", pnl=(4227.0 if i % 2 == 0 else -5262.0))
+            for i in range(8)
+        ]
+        svg = _render_symbol_pnl_svg(trades)
+        assert self._SYMBOL_BAR_LABEL_STYLE not in svg
+        # 심볼 티커(x축) 라벨은 값 라벨 생략과 무관하게 계속 보여야 한다
+        assert "SYM0" in svg
+
+    def test_html_symbol_pnl_chart_few_symbols_still_shows_bar_labels(self) -> None:
+        """심볼 수가 적으면(소규모) 기존처럼 막대별 값 라벨이 정상적으로 보여야
+        한다 — 겹침 방지 로직이 과도하게 라벨을 숨기지 않는지 확인."""
+        trades = [self._trade(symbol="BTC/KRW", pnl=100_000.0)]
+        svg = _render_symbol_pnl_svg(trades)
+        assert self._SYMBOL_BAR_LABEL_STYLE in svg
+        assert "+₩100,000" in svg
+
+    def test_html_chart_bars_use_dedicated_vivid_chart_tokens(self) -> None:
+        """차트 막대는 절제된 구조색(--signal-buy/--signal-sell)이 아니라 어두운
+        배경 위에서 도드라지도록 채도를 높인 전용 토큰(--chart-buy/--chart-sell)을
+        써야 한다 — 구조적 UI(버튼/배지) 톤은 그대로 두고 데이터 시각화만 조정."""
+        equity = [{"time": "2026-09-01T00:00:00", "pnl": 100.0}]
+        html = render_dashboard(self._status(), [], {}, equity=equity)
+        assert "--chart-buy" in html
+        assert "--chart-sell" in html
+        assert 'fill="var(--chart-buy)"' in html
+
+    def test_html_chart_bar_width_has_min_and_max_clamp(self) -> None:
+        """막대 폭 계산식(barW)이 슬롯 폭의 고정 비율(약 62%)에 상한/하한 클램프를
+        두는지 확인한다 — 이전엔 상한이 없어 막대 수가 적을 때 과도하게 두꺼워졌다."""
+        html = render_dashboard(self._status(), [], {})
+        assert "slot * 0.62" in html  # renderEquity (JS)
+        assert "symSlot * 0.62" in html  # renderSymbolPnl (JS)
 
 
 # ── FastAPI routes ─────────────────────────────────────────────────────────────
