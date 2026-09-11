@@ -44,8 +44,9 @@ from src.config import live_params as lp  # noqa: E402
 DEFAULT_SYMBOLS = ["BTC/KRW", "ETH/KRW", "XRP/KRW", "SUI/KRW"]
 _STRATEGY_KEYS = (
     "adx_trend_threshold", "mr_vol_mult", "mr_rsi_oversold_fast",
-    "mr_rsi_oversold_slow", "mr_rsi_exit", "mr_no_entry_hours_utc",
-    "mr_sma_period", "mr_sma_floor", "sm_vol_mult", "sm_adx_threshold",
+    "mr_rsi_oversold_slow", "mr_rsi_exit", "mr_rsi_exit_fast",
+    "mr_no_entry_hours_utc", "mr_sma_period", "mr_sma_floor",
+    "sm_vol_mult", "sm_adx_threshold",
 )
 
 
