@@ -15,6 +15,7 @@ def isolate_files(tmp_path, monkeypatch):
     monkeypatch.setattr(lp, "AUDIT_LOG", tmp_path / "reports" / "param_change_log.jsonl")
     monkeypatch.setattr(lp, "RESTART_FLAG", tmp_path / ".restart_requested")
     monkeypatch.setattr(lp, "PENDING_FILE", tmp_path / "reports" / "pending_param_change.json")
+    monkeypatch.setattr(lp, "VALIDATION_FILE", tmp_path / "reports" / "pending_param_validation.json")
     return tmp_path
 
 
@@ -187,6 +188,70 @@ class TestProposePending:
     def test_clear_pending_when_absent_is_safe(self):
         lp.clear_pending()  # should not raise
         assert lp.has_pending_change() is False
+
+
+class TestValidationResult:
+    def test_no_result_initially(self):
+        assert lp.load_validation_result() is None
+
+    def test_save_then_load_roundtrips(self):
+        lp.save_validation_result(
+            passed=True, checks=[{"name": "profit_factor", "passed": True, "detail": "ok"}],
+            baseline_metrics={"profit_factor": 1.0}, candidate_metrics={"profit_factor": 1.2},
+        )
+        result = lp.load_validation_result()
+        assert result["passed"] is True
+        assert result["baseline_metrics"]["profit_factor"] == 1.0
+        assert result["candidate_metrics"]["profit_factor"] == 1.2
+        assert "validated_at" in result
+
+    def test_clear_removes_file(self):
+        lp.save_validation_result(passed=False, checks=[], baseline_metrics={}, candidate_metrics={})
+        lp.clear_validation_result()
+        assert lp.load_validation_result() is None
+
+    def test_clear_when_absent_is_safe(self):
+        lp.clear_validation_result()  # should not raise
+        assert lp.load_validation_result() is None
+
+
+class TestApplyPending:
+    def test_no_pending_change_is_a_safe_noop(self):
+        assert lp.apply_pending() == []
+        assert not lp.restart_requested()
+
+    def test_applies_all_pending_strategy_and_risk_params(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        lp.propose_pending("sl_floor_pct", 3.5, trigger="t", reason="r")
+        summaries = lp.apply_pending()
+        assert len(summaries) == 2
+        after = lp.load()
+        assert after["strategy_params"]["mr_vol_mult"] == pytest.approx(2.2)
+        assert after["risk"]["sl_floor_pct"] == pytest.approx(3.5)
+
+    def test_requests_restart_when_something_changed(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        lp.apply_pending()
+        assert lp.restart_requested()
+
+    def test_no_restart_requested_when_nothing_to_apply(self):
+        lp.apply_pending()
+        assert not lp.restart_requested()
+
+    def test_clears_pending_and_validation_after_applying(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        lp.save_validation_result(passed=True, checks=[], baseline_metrics={}, candidate_metrics={})
+        lp.apply_pending()
+        assert not lp.has_pending_change()
+        assert lp.load_validation_result() is None
+
+    def test_writes_audit_log_entry_for_each_applied_param(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        lp.apply_pending()
+        lines = lp.AUDIT_LOG.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1
+        entry = json.loads(lines[0])
+        assert entry["trigger"] == "performance_gate_approved"
 
 
 class TestRestartFlag:

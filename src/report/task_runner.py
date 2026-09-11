@@ -220,7 +220,7 @@ class ScheduledTaskRunner:
             summary = ", ".join(f"{a['param']} {a['old']}→{a['new']}" for a in changed)
             detail = (
                 f"{trigger} — 진입 조건 강화안 제안(미적용): {summary}\n"
-                f"검증 필요: scripts/validate_params.py --apply"
+                f"검증 필요 — 대시보드(승인/거부 버튼) 또는 scripts/validate_params.py --apply"
             )
         else:
             detail = f"{trigger} — 파라미터가 이미 안전범위 경계라 제안할 조정 없음"
@@ -250,7 +250,7 @@ class ScheduledTaskRunner:
         if result["changed"]:
             detail = (
                 f"{trigger} — TP RR 상향안 제안(미적용): {result['old']}→{result['new']}\n"
-                f"검증 필요: scripts/validate_params.py --apply"
+                f"검증 필요 — 대시보드(승인/거부 버튼) 또는 scripts/validate_params.py --apply"
             )
         else:
             detail = f"{trigger} — tp_rr_multiplier가 이미 안전범위 경계라 제안할 조정 없음"
@@ -284,7 +284,7 @@ class ScheduledTaskRunner:
         if result["changed"]:
             detail = (
                 f"SL 청산 {sl_ratio:.1f}% 과다 — SL 허용폭 완화안 제안(미적용): "
-                f"{result['old']}%→{result['new']}%\n검증 필요: scripts/validate_params.py --apply"
+                f"{result['old']}%→{result['new']}%\n검증 필요 — 대시보드(승인/거부 버튼) 또는 scripts/validate_params.py --apply"
             )
         else:
             detail = f"SL 청산 {sl_ratio:.1f}% 과다 — sl_floor_pct가 이미 안전범위 경계라 제안할 조정 없음"

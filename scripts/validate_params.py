@@ -70,24 +70,6 @@ def _risk_config(risk: dict) -> ExitBacktestConfig:
     )
 
 
-def _apply_pending(pending: dict) -> None:
-    changed_summaries = []
-    for section, keys in (("strategy_params", pending.get("strategy_params", {})),
-                           ("risk", pending.get("risk", {}))):
-        for param, target_value in keys.items():
-            result = lp.propose_and_apply(
-                param, float(target_value),
-                trigger="performance_gate_approved",
-                reason="Passed src/backtest/performance_gate.py validation",
-            )
-            if result["changed"]:
-                changed_summaries.append(f"{param} {result['old']}->{result['new']}")
-    lp.enforce_rsi_gap()
-    if changed_summaries:
-        lp.request_restart("validate_params.py --apply: " + ", ".join(changed_summaries))
-    lp.clear_pending()
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pending", required=True, help="Path to the proposed change JSON")
@@ -125,15 +107,25 @@ def main() -> int:
 
     print(result.report())
 
+    # Cache the result regardless of pass/fail so the dashboard's
+    # /api/params/pending can show it without re-running this (heavy)
+    # backtest itself.
+    lp.save_validation_result(
+        passed=result.gate.passed,
+        checks=[{"name": c.name, "passed": c.passed, "detail": c.detail} for c in result.gate.checks],
+        baseline_metrics=result.baseline_metrics,
+        candidate_metrics=result.candidate_metrics,
+    )
+
     if not result.gate.passed:
         print("\nGate FAILED — not applying.")
         return 1
 
     if args.apply:
-        _apply_pending(pending)
+        lp.apply_pending("validate_params.py --apply")
         print("\nGate PASSED — applied live, restart requested.")
     else:
-        print("\nGate PASSED — rerun with --apply to commit live.")
+        print("\nGate PASSED — rerun with --apply to commit live (or approve from the dashboard).")
     return 0
 
 

@@ -16,12 +16,14 @@ def render_dashboard(
     equity: list[dict] | None = None,
     balance: list[dict] | None = None,
     ticks: list[dict] | None = None,
+    pending_params: dict | None = None,
 ) -> str:
     trades = trades or []
     stats = stats or {}
     equity = equity or []
     balance = balance or []
     ticks = ticks or []
+    pending_params = pending_params or {"has_pending": False}
 
     mode = status.get("mode", "unknown").upper()
     paused = status.get("paused", False)
@@ -41,6 +43,7 @@ def render_dashboard(
     buy_html = _render_buy_history(trades, positions)
     sell_html = _render_sell_history(trades)
     pnl_html = _render_pnl(pnl)
+    pending_params_html = _render_pending_params(pending_params)
     balance_html = _render_balance(balance)
     ticks_html = _render_ticks(ticks)
     # Seed the client-side _ticksMap with server-rendered data so the table is
@@ -177,6 +180,9 @@ def render_dashboard(
   <!-- Row 2: 성과분석 -->
   {stats_html}
 
+  <!-- Pending parameter change (performance-gate approval) -->
+  <div id="pending-params-card" class="card" style="margin-bottom:1.2rem">{pending_params_html}</div>
+
   <!-- Balance card -->
   <div id="balance-card" class="card" style="margin-bottom:1.2rem">
     <h2>주문가능 코인 잔고</h2>
@@ -237,7 +243,7 @@ let _strategyParams = {{}};
 let _positionsMap = {{}};  // symbol → position (entry_price, amount)
 async function refresh() {{
   try {{
-    const [s, pos, pnl, trades, stats, eq, bal, ticks, strat] = await Promise.all([
+    const [s, pos, pnl, trades, stats, eq, bal, ticks, strat, pendingParams] = await Promise.all([
       fetch('/api/status').then(r=>r.json()),
       fetch('/api/positions').then(r=>r.json()),
       fetch('/api/pnl').then(r=>r.json()),
@@ -247,6 +253,7 @@ async function refresh() {{
       fetch('/api/balance').then(r=>r.json()),
       fetch('/api/ticks').then(r=>r.json()),
       fetch('/api/strategy').then(r=>r.json()),
+      fetch('/api/params/pending').then(r=>r.json()),
     ]);
     document.getElementById('meta').textContent = '새로고침: ' + new Date().toLocaleTimeString();
     // Update positions map for tick table lookup
@@ -258,6 +265,7 @@ async function refresh() {{
     renderEquity(eq);
     renderBalance(bal);
     renderStrategy(strat);
+    renderPendingParams(pendingParams);
     (ticks || []).forEach(t => {{ _ticksMap[t.symbol] = t; }});
     renderTicks(ticks);
     renderPositions(pos);
@@ -901,6 +909,54 @@ async function engineAction(action) {{
     setTimeout(refresh, 300);
   }} catch(e) {{ showToast('오류: '+e.message); }}
 }}
+function renderPendingParams(p) {{
+  const el = document.getElementById('pending-params-card');
+  if (!el) return;
+  if (!p || !p.has_pending) {{
+    el.innerHTML = '<h2>⚙️ 자동튜너 제안</h2><p class="empty">대기 중인 변경 없음</p>';
+    return;
+  }}
+  const meta = p.meta || {{}};
+  const allParams = {{...(p.strategy_params||{{}}), ...(p.risk||{{}})}};
+  const rows = Object.entries(allParams).map(([k,v]) => {{
+    const old = (meta[k]||{{}}).old ?? '?';
+    return `<div class="stat-row"><span class="stat-label">${{k}}</span><span class="stat-value">${{old}} → ${{v}}</span></div>`;
+  }}).join('');
+
+  if (!p.validation) {{
+    el.innerHTML = `<h2>⚙️ 자동튜너 제안 — 검증 대기</h2>${{rows}}
+      <p style="color:#f59e0b;font-size:.85rem;margin-top:.5rem">⏳ 백테스트 검증 대기 중</p>`;
+    return;
+  }}
+  const v = p.validation;
+  const b = v.baseline_metrics || {{}}, c = v.candidate_metrics || {{}};
+  const fmt = (m,k,suf) => (typeof m[k]==='number') ? m[k].toFixed(2)+(suf||'') : '-';
+  const metrics = `
+    <div class="stat-row"><span class="stat-label">Profit Factor</span><span class="stat-value">${{fmt(b,'profit_factor')}} → ${{fmt(c,'profit_factor')}}</span></div>
+    <div class="stat-row"><span class="stat-label">승률</span><span class="stat-value">${{fmt(b,'win_rate_pct','%')}} → ${{fmt(c,'win_rate_pct','%')}}</span></div>
+    <div class="stat-row"><span class="stat-label">최대낙폭</span><span class="stat-value">${{fmt(b,'max_drawdown_pct','%')}} → ${{fmt(c,'max_drawdown_pct','%')}}</span></div>`;
+  const status = v.passed
+    ? '<p style="color:#10b981;font-weight:700;margin:.5rem 0">✅ 검증 통과</p>'
+    : '<p style="color:#ef4444;font-weight:700;margin:.5rem 0">❌ 검증 실패 — 승인 불가</p>';
+  const buttons = v.passed
+    ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.75rem">
+         <button class="btn-resume" onclick="paramAction('approve')" style="padding:.5rem;border-radius:.4rem;width:100%">✅ 승인 &amp; 적용</button>
+         <button class="btn-pause" onclick="paramAction('reject')" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 거부</button>
+       </div>`
+    : `<div style="margin-top:.75rem">
+         <button class="btn-pause" onclick="paramAction('reject')" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 제안 삭제</button>
+       </div>`;
+  el.innerHTML = `<h2>⚙️ 자동튜너 제안 — 승인 대기</h2>${{rows}}${{metrics}}${{status}}${{buttons}}`;
+}}
+async function paramAction(action) {{
+  if (action === 'approve' && !confirm('이 변경을 실거래에 반영할까요? 잠시 후 재시작됩니다.')) return;
+  try {{
+    const res = await fetch('/api/params/'+action, {{method:'POST'}});
+    const d = await res.json();
+    showToast(d.message || action + ' 완료');
+    setTimeout(refresh, 300);
+  }} catch(e) {{ showToast('오류: '+e.message); }}
+}}
 function showToast(msg) {{
   const t = document.getElementById('toast');
   t.textContent = msg; t.style.display = 'block';
@@ -943,6 +999,66 @@ def _render_pnl(pnl: dict) -> str:
       <div class="stat-row"><span class="stat-label">실현 손익</span><span class="stat-value">{fmt(realized)}</span></div>
       <div class="stat-row"><span class="stat-label">미실현 손익</span><span class="stat-value">{fmt(unrealized)}</span></div>
     </div>"""
+
+
+def _render_pending_params(pending: dict) -> str:
+    """
+    Auto-tuner proposal (src.config.live_params.PENDING_FILE) + its cached
+    backtest validation result (VALIDATION_FILE, written by
+    scripts/validate_params.py), with approve/reject buttons wired to
+    POST /api/params/approve|reject. Mirrors renderPendingParams() in the
+    client-side JS below (same dual server+client render pattern already
+    used for pnl/stats).
+    """
+    if not pending.get("has_pending"):
+        return '<h2>⚙️ 자동튜너 제안</h2><p class="empty">대기 중인 변경 없음</p>'
+
+    meta = pending.get("meta", {})
+    all_params = {**pending.get("strategy_params", {}), **pending.get("risk", {})}
+    rows_html = "\n".join(
+        f'<div class="stat-row"><span class="stat-label">{param}</span>'
+        f'<span class="stat-value">{meta.get(param, {}).get("old", "?")} → {new_val}</span></div>'
+        for param, new_val in all_params.items()
+    )
+
+    validation = pending.get("validation")
+    if validation is None:
+        return f"""<h2>⚙️ 자동튜너 제안 — 검증 대기</h2>
+        {rows_html}
+        <p style="color:#f59e0b;font-size:.85rem;margin-top:.5rem">⏳ 백테스트 검증 대기 중</p>"""
+
+    passed = validation.get("passed", False)
+    b = validation.get("baseline_metrics", {})
+    c = validation.get("candidate_metrics", {})
+
+    def _fmt(m: dict, key: str, suffix: str = "") -> str:
+        v = m.get(key)
+        return f"{v:.2f}{suffix}" if isinstance(v, (int, float)) else "-"
+
+    metrics_html = f"""
+    <div class="stat-row"><span class="stat-label">Profit Factor</span><span class="stat-value">{_fmt(b,'profit_factor')} → {_fmt(c,'profit_factor')}</span></div>
+    <div class="stat-row"><span class="stat-label">승률</span><span class="stat-value">{_fmt(b,'win_rate_pct','%')} → {_fmt(c,'win_rate_pct','%')}</span></div>
+    <div class="stat-row"><span class="stat-label">최대낙폭</span><span class="stat-value">{_fmt(b,'max_drawdown_pct','%')} → {_fmt(c,'max_drawdown_pct','%')}</span></div>"""
+
+    if passed:
+        status_html = '<p style="color:#10b981;font-weight:700;margin:.5rem 0">✅ 검증 통과</p>'
+        buttons_html = """
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.75rem">
+          <button class="btn-resume" onclick="paramAction('approve')" style="padding:.5rem;border-radius:.4rem;width:100%">✅ 승인 &amp; 적용</button>
+          <button class="btn-pause" onclick="paramAction('reject')" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 거부</button>
+        </div>"""
+    else:
+        status_html = '<p style="color:#ef4444;font-weight:700;margin:.5rem 0">❌ 검증 실패 — 승인 불가</p>'
+        buttons_html = """
+        <div style="margin-top:.75rem">
+          <button class="btn-pause" onclick="paramAction('reject')" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 제안 삭제</button>
+        </div>"""
+
+    return f"""<h2>⚙️ 자동튜너 제안 — 승인 대기</h2>
+    {rows_html}
+    {metrics_html}
+    {status_html}
+    {buttons_html}"""
 
 
 def _render_stats(stats: dict) -> str:

@@ -156,6 +156,91 @@ class TestDashboardState:
         assert state.engine is eng
 
 
+# ── Pending Parameter Change ──────────────────────────────────────────────────
+
+class TestPendingParamChange:
+    @pytest.fixture(autouse=True)
+    def isolate_live_params(self, tmp_path, monkeypatch):
+        import src.config.live_params as lp
+        monkeypatch.setattr(lp, "PARAMS_FILE", tmp_path / ".strategy_params.json")
+        monkeypatch.setattr(lp, "AUDIT_LOG", tmp_path / "param_change_log.jsonl")
+        monkeypatch.setattr(lp, "RESTART_FLAG", tmp_path / ".restart_requested")
+        monkeypatch.setattr(lp, "PENDING_FILE", tmp_path / "pending_param_change.json")
+        monkeypatch.setattr(lp, "VALIDATION_FILE", tmp_path / "pending_param_validation.json")
+        return tmp_path
+
+    def test_no_pending_change(self):
+        state = DashboardState()
+        result = state.get_pending_param_change()
+        assert result == {"has_pending": False}
+
+    def test_pending_without_validation(self):
+        import src.config.live_params as lp
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="wr_alert", reason="WR low")
+
+        state = DashboardState()
+        result = state.get_pending_param_change()
+        assert result["has_pending"] is True
+        assert result["strategy_params"]["mr_vol_mult"] == pytest.approx(2.2)
+        assert result["validation"] is None
+
+    def test_pending_with_validation(self):
+        import src.config.live_params as lp
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="wr_alert", reason="WR low")
+        lp.save_validation_result(
+            passed=True, checks=[{"name": "profit_factor", "passed": True, "detail": "ok"}],
+            baseline_metrics={"profit_factor": 1.0}, candidate_metrics={"profit_factor": 1.2},
+        )
+
+        state = DashboardState()
+        result = state.get_pending_param_change()
+        assert result["validation"]["passed"] is True
+        assert result["validation"]["candidate_metrics"]["profit_factor"] == 1.2
+
+    def test_approve_without_validation_refuses(self):
+        import src.config.live_params as lp
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="wr_alert", reason="WR low")
+
+        state = DashboardState()
+        result = state.approve_pending_param_change()
+        assert result["success"] is False
+        assert lp.get_current("mr_vol_mult") == lp.DEFAULTS["strategy_params"]["mr_vol_mult"]
+
+    def test_approve_with_failed_validation_refuses(self):
+        import src.config.live_params as lp
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="wr_alert", reason="WR low")
+        lp.save_validation_result(passed=False, checks=[], baseline_metrics={}, candidate_metrics={})
+
+        state = DashboardState()
+        result = state.approve_pending_param_change()
+        assert result["success"] is False
+        assert lp.has_pending_change()  # untouched, still there for a human to reconsider
+
+    def test_approve_with_passed_validation_applies_live(self):
+        import src.config.live_params as lp
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="wr_alert", reason="WR low")
+        lp.save_validation_result(passed=True, checks=[], baseline_metrics={}, candidate_metrics={})
+
+        state = DashboardState()
+        result = state.approve_pending_param_change()
+        assert result["success"] is True
+        assert lp.get_current("mr_vol_mult") == pytest.approx(2.2)
+        assert not lp.has_pending_change()
+        assert lp.restart_requested()
+
+    def test_reject_clears_pending_and_validation(self):
+        import src.config.live_params as lp
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="wr_alert", reason="WR low")
+        lp.save_validation_result(passed=True, checks=[], baseline_metrics={}, candidate_metrics={})
+
+        state = DashboardState()
+        result = state.reject_pending_param_change()
+        assert result["success"] is True
+        assert not lp.has_pending_change()
+        assert lp.load_validation_result() is None
+        assert lp.get_current("mr_vol_mult") == lp.DEFAULTS["strategy_params"]["mr_vol_mult"]
+
+
 # ── HTML Template ─────────────────────────────────────────────────────────────
 
 class TestRenderDashboard:
@@ -316,6 +401,34 @@ class TestFastAPIRoutes:
     def test_get_trades_limit_param(self, client) -> None:
         resp = client.get("/api/trades?limit=10")
         assert resp.status_code == 200
+
+    def test_get_params_pending_no_change(self, client, monkeypatch, tmp_path) -> None:
+        import src.config.live_params as lp
+        monkeypatch.setattr(lp, "PENDING_FILE", tmp_path / "pending_param_change.json")
+        resp = client.get("/api/params/pending")
+        assert resp.status_code == 200
+        assert resp.json() == {"has_pending": False}
+
+    def test_post_params_approve_without_validation_returns_409(self, client, monkeypatch, tmp_path) -> None:
+        import src.config.live_params as lp
+        monkeypatch.setattr(lp, "PARAMS_FILE", tmp_path / ".strategy_params.json")
+        monkeypatch.setattr(lp, "AUDIT_LOG", tmp_path / "param_change_log.jsonl")
+        monkeypatch.setattr(lp, "RESTART_FLAG", tmp_path / ".restart_requested")
+        monkeypatch.setattr(lp, "PENDING_FILE", tmp_path / "pending_param_change.json")
+        monkeypatch.setattr(lp, "VALIDATION_FILE", tmp_path / "pending_param_validation.json")
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+
+        resp = client.post("/api/params/approve")
+        assert resp.status_code == 409
+        assert resp.json()["success"] is False
+
+    def test_post_params_reject_returns_200(self, client, monkeypatch, tmp_path) -> None:
+        import src.config.live_params as lp
+        monkeypatch.setattr(lp, "PENDING_FILE", tmp_path / "pending_param_change.json")
+        monkeypatch.setattr(lp, "VALIDATION_FILE", tmp_path / "pending_param_validation.json")
+        resp = client.post("/api/params/reject")
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
 
     def test_post_resume_with_engine_returns_200(self, client) -> None:
         state = get_dashboard_state()

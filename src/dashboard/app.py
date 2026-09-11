@@ -11,6 +11,9 @@ Exposes:
   GET  /api/equity          — Cumulative PnL curve (JSON)
   POST /api/engine/pause    — Pause trading
   POST /api/engine/resume   — Resume trading
+  GET  /api/params/pending  — Auto-tuner's proposed param change + backtest validation, if any
+  POST /api/params/approve  — Commit the pending change live (only if it passed validation)
+  POST /api/params/reject   — Discard the pending change
 """
 from __future__ import annotations
 
@@ -44,6 +47,7 @@ async def dashboard() -> str:
         equity=state.get_equity_curve(),
         balance=state.get_balance(),
         ticks=state.get_ticks(),
+        pending_params=state.get_pending_param_change(),
     )
 
 
@@ -171,3 +175,22 @@ async def get_mode() -> JSONResponse:
     """Return current mode from .trading_mode file."""
     mode = _MODE_FILE.read_text(encoding="utf-8").strip() if _MODE_FILE.exists() else "paper"
     return JSONResponse({"mode": mode})
+
+
+# ── Pending Parameter Change (performance-gate approval) ─────────────────────
+
+@app.get("/api/params/pending")
+async def get_pending_params() -> JSONResponse:
+    return JSONResponse(get_dashboard_state().get_pending_param_change())
+
+
+@app.post("/api/params/approve")
+async def approve_pending_params() -> JSONResponse:
+    result = get_dashboard_state().approve_pending_param_change()
+    return JSONResponse(result, status_code=200 if result["success"] else 409)
+
+
+@app.post("/api/params/reject")
+async def reject_pending_params() -> JSONResponse:
+    result = get_dashboard_state().reject_pending_param_change()
+    return JSONResponse(result)

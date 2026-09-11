@@ -11,6 +11,8 @@ import queue
 import threading
 from typing import TYPE_CHECKING
 
+from src.config import live_params as lp
+
 if TYPE_CHECKING:
     from src.engine import TradingEngine
 
@@ -290,6 +292,48 @@ class DashboardState:
             return result
         except Exception:  # noqa: BLE001
             return []
+
+    def get_pending_param_change(self) -> dict:
+        """
+        Combines the auto-tuner's proposed change (src.config.live_params.
+        PENDING_FILE) with its cached backtest validation result (VALIDATION_
+        FILE, written by scripts/validate_params.py) into one payload the
+        dashboard can render without ever running a backtest itself.
+        """
+        pending = lp.load_pending()
+        if not pending:
+            return {"has_pending": False}
+        validation = lp.load_validation_result()
+        return {
+            "has_pending": True,
+            "strategy_params": pending.get("strategy_params", {}),
+            "risk": pending.get("risk", {}),
+            "meta": pending.get("_meta", {}),
+            "validation": validation,  # None until scripts/validate_params.py has run
+        }
+
+    def approve_pending_param_change(self) -> dict:
+        """
+        Commits the pending change live — but only if it already cleared the
+        performance gate (src/backtest/performance_gate.py). Approving a
+        change that was never validated, or that failed validation, is
+        refused here as a backend-side safety check independent of whatever
+        the UI shows.
+        """
+        validation = lp.load_validation_result()
+        if validation is None:
+            return {"success": False, "message": "검증 결과가 없습니다 — 먼저 scripts/validate_params.py로 검증하세요."}
+        if not validation.get("passed"):
+            return {"success": False, "message": "성능 게이트를 통과하지 못한 제안은 승인할 수 없습니다."}
+        changed = lp.apply_pending("dashboard_approve")
+        if not changed:
+            return {"success": True, "message": "이미 안전범위 경계라 실제로 반영된 변경은 없습니다."}
+        return {"success": True, "message": f"반영 완료, 재시작 예정: {', '.join(changed)}"}
+
+    def reject_pending_param_change(self) -> dict:
+        lp.clear_pending()
+        lp.clear_validation_result()
+        return {"success": True, "message": "제안을 거부하고 삭제했습니다."}
 
     def pause(self) -> None:
         eng = self.engine

@@ -28,6 +28,12 @@ RESTART_FLAG = _ROOT / ".restart_requested"
 # params.json 에는 절대 반영되지 않는다. propose_and_apply()와 달리 이쪽은
 # 라이브에 아무 영향을 주지 않는 순수 제안 단계.
 PENDING_FILE = _ROOT / "reports" / "pending_param_change.json"
+# scripts/validate_params.py 가 백테스트 검증(무거운 연산, 라이브 서버에서는
+# 돌리지 않음)을 마치면 그 결과(pass/fail + 지표 비교)를 여기 캐시해둔다.
+# 대시보드는 이 파일만 읽으면 되고, 승인 버튼을 누를 때도 이 파일에
+# passed=True 가 찍혀 있어야만 실제로 반영한다 — 검증을 안 거친 제안은
+# 대시보드에서도 절대 적용될 수 없다.
+VALIDATION_FILE = _ROOT / "reports" / "pending_param_validation.json"
 
 # 파라미터 1회 변동폭 상한: 이전 값의 ±20%
 MAX_STEP_FRACTION = 0.20
@@ -225,8 +231,84 @@ def has_pending_change() -> bool:
     return PENDING_FILE.exists()
 
 
+def load_pending() -> dict[str, Any]:
+    """Public read accessor for the pending proposal — {} if none is staged."""
+    return _load_pending()
+
+
 def clear_pending() -> None:
     PENDING_FILE.unlink(missing_ok=True)
+
+
+def save_validation_result(
+    passed: bool, checks: list[dict[str, Any]], baseline_metrics: dict[str, Any],
+    candidate_metrics: dict[str, Any],
+) -> None:
+    """scripts/validate_params.py calls this right after running the
+    performance gate, whether it passed or failed, so the dashboard can
+    show the comparison without re-running the (heavy) backtest itself."""
+    VALIDATION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    VALIDATION_FILE.write_text(
+        json.dumps(
+            {
+                "passed": passed,
+                "checks": checks,
+                "baseline_metrics": baseline_metrics,
+                "candidate_metrics": candidate_metrics,
+                "validated_at": datetime.now(KST).isoformat(timespec="seconds"),
+            },
+            ensure_ascii=False, indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def load_validation_result() -> dict[str, Any] | None:
+    if not VALIDATION_FILE.exists():
+        return None
+    try:
+        return json.loads(VALIDATION_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def clear_validation_result() -> None:
+    VALIDATION_FILE.unlink(missing_ok=True)
+
+
+def apply_pending(trigger_source: str = "validate_params.py --apply") -> list[str]:
+    """
+    Commits the currently-staged pending change live: propose_and_apply()
+    (step-cap/clamp/audit-log, same as any other tunable) for every param
+    in PENDING_FILE, then enforce_rsi_gap(), request a restart if anything
+    actually changed, and clear both the pending and validation files.
+
+    Callers (scripts/validate_params.py --apply, the dashboard's approve
+    endpoint) are responsible for checking load_validation_result()["passed"]
+    is True *before* calling this — this function does not re-check the
+    gate itself, it only performs the write.
+
+    Returns a list of "param old->new" summary strings (empty if nothing
+    was actually changed, e.g. every proposed value was already at the
+    current live value or a safety bound).
+    """
+    pending = _load_pending()
+    changed_summaries: list[str] = []
+    for section in ("strategy_params", "risk"):
+        for param, target_value in pending.get(section, {}).items():
+            result = propose_and_apply(
+                param, float(target_value),
+                trigger="performance_gate_approved", reason=trigger_source,
+            )
+            if result["changed"]:
+                changed_summaries.append(f"{param} {result['old']}->{result['new']}")
+
+    enforce_rsi_gap()
+    if changed_summaries:
+        request_restart(f"{trigger_source}: " + ", ".join(changed_summaries))
+    clear_pending()
+    clear_validation_result()
+    return changed_summaries
 
 
 def enforce_rsi_gap(min_gap: float = _RSI_MIN_GAP) -> dict[str, Any] | None:
