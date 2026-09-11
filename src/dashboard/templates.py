@@ -428,7 +428,7 @@ function renderModeSwitchBtn(mode) {{
 
   if (mode === 'LIVE') {{
     return `<div class="mode-switch">
-      <button class="btn-to-paper" onclick="switchMode('paper')" style="width:100%">📋 PAPER 모드로 전환</button>
+      <button class="btn-to-paper" onclick="switchMode('paper',this)" style="width:100%">📋 PAPER 모드로 전환</button>
     </div>`;
   }}
   if (!unlocked) {{
@@ -437,15 +437,16 @@ function renderModeSwitchBtn(mode) {{
     </div>`;
   }}
   return `<div class="mode-switch">
-    <button class="btn-live" onclick="switchMode('live')" style="width:100%">⚡ LIVE 모드로 전환</button>
+    <button class="btn-live" onclick="switchMode('live',this)" style="width:100%">⚡ LIVE 모드로 전환</button>
   </div>`;
 }}
-async function switchMode(targetMode) {{
+async function switchMode(targetMode, btn) {{
   const label = targetMode === 'live' ? 'LIVE' : 'PAPER';
   const warn  = targetMode === 'live'
     ? '⚠️ LIVE 모드로 전환하면 실제 자산으로 거래됩니다.\\n정말 전환하시겠습니까?'
     : 'PAPER 모드로 전환합니다. 실거래가 중단됩니다.\\n계속하시겠습니까?';
   if (!confirm(warn)) return;
+  if (btn) {{ if (btn.disabled) return; btn.disabled = true; btn.dataset.origText = btn.textContent; btn.textContent = '처리중…'; }}
   try {{
     const res = await fetch('/api/engine/set-mode', {{
       method: 'POST',
@@ -458,9 +459,11 @@ async function switchMode(targetMode) {{
       setTimeout(() => location.reload(), 12000);
     }} else {{
       showToast('전환 실패: ' + data.message, true);
+      if (btn) {{ btn.disabled = false; btn.textContent = btn.dataset.origText || btn.textContent; }}
     }}
   }} catch(e) {{
     showToast('오류: ' + e.message, true);
+    if (btn) {{ btn.disabled = false; btn.textContent = btn.dataset.origText || btn.textContent; }}
   }}
 }}
 function renderPnl(pnl) {{
@@ -491,8 +494,8 @@ function renderPnl(pnl) {{
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.75rem">
-      <button class="btn-pause" onclick="engineAction('pause')" style="padding:.45rem;font-size:.8rem;border-radius:.4rem;width:100%">⏸ 일시정지</button>
-      <button class="btn-resume" onclick="engineAction('resume')" style="padding:.45rem;font-size:.8rem;border-radius:.4rem;width:100%">▶ 재개</button>
+      <button class="btn-pause" onclick="engineAction('pause',this)" style="padding:.45rem;font-size:.8rem;border-radius:.4rem;width:100%">⏸ 일시정지</button>
+      <button class="btn-resume" onclick="engineAction('resume',this)" style="padding:.45rem;font-size:.8rem;border-radius:.4rem;width:100%">▶ 재개</button>
     </div>`;
 }}
 function renderStats(stats) {{
@@ -1080,13 +1083,15 @@ function _updateThemeToggleIcon(theme) {{
   const btn = document.getElementById('theme-toggle');
   if (btn) btn.textContent = theme === 'light' ? '☀' : '🌙';
 }}
-async function engineAction(action) {{
+async function engineAction(action, btn) {{
+  if (btn) {{ if (btn.disabled) return; btn.disabled = true; btn.dataset.origText = btn.textContent; btn.textContent = '처리중…'; }}
   try {{
     const res = await fetch('/api/engine/'+action, {{method:'POST'}});
     const d = await res.json();
     showToast(d.message || action + ' 완료');
     setTimeout(refresh, 300);
   }} catch(e) {{ showToast('오류: '+e.message); }}
+  finally {{ if (btn) {{ btn.disabled = false; btn.textContent = btn.dataset.origText || btn.textContent; }} }}
 }}
 function renderPendingParams(p) {{
   const el = document.getElementById('pending-params-card');
@@ -1119,22 +1124,24 @@ function renderPendingParams(p) {{
     : '<p style="color:#ef4444;font-weight:700;margin:.5rem 0">❌ 검증 실패 — 승인 불가</p>';
   const buttons = v.passed
     ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.75rem">
-         <button class="btn-resume" onclick="paramAction('approve')" style="padding:.5rem;border-radius:.4rem;width:100%">✅ 승인 &amp; 적용</button>
-         <button class="btn-pause" onclick="paramAction('reject')" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 거부</button>
+         <button class="btn-resume" onclick="paramAction('approve',this)" style="padding:.5rem;border-radius:.4rem;width:100%">✅ 승인 &amp; 적용</button>
+         <button class="btn-pause" onclick="paramAction('reject',this)" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 거부</button>
        </div>`
     : `<div style="margin-top:.75rem">
-         <button class="btn-pause" onclick="paramAction('reject')" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 제안 삭제</button>
+         <button class="btn-pause" onclick="paramAction('reject',this)" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 제안 삭제</button>
        </div>`;
   el.innerHTML = `<h2>⚙️ 자동튜너 제안 — 승인 대기</h2>${{rows}}${{metrics}}${{status}}${{buttons}}`;
 }}
-async function paramAction(action) {{
+async function paramAction(action, btn) {{
   if (action === 'approve' && !confirm('이 변경을 실거래에 반영할까요? 잠시 후 재시작됩니다.')) return;
+  if (btn) {{ if (btn.disabled) return; btn.disabled = true; btn.dataset.origText = btn.textContent; btn.textContent = '처리중…'; }}
   try {{
     const res = await fetch('/api/params/'+action, {{method:'POST'}});
     const d = await res.json();
     showToast(d.message || action + ' 완료');
     setTimeout(refresh, 300);
   }} catch(e) {{ showToast('오류: '+e.message); }}
+  finally {{ if (btn) {{ btn.disabled = false; btn.textContent = btn.dataset.origText || btn.textContent; }} }}
 }}
 function showToast(msg) {{
   const t = document.getElementById('toast');
@@ -1225,14 +1232,14 @@ def _render_pending_params(pending: dict) -> str:
         status_html = '<p style="color:#10b981;font-weight:700;margin:.5rem 0">✅ 검증 통과</p>'
         buttons_html = """
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.75rem">
-          <button class="btn-resume" onclick="paramAction('approve')" style="padding:.5rem;border-radius:.4rem;width:100%">✅ 승인 &amp; 적용</button>
-          <button class="btn-pause" onclick="paramAction('reject')" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 거부</button>
+          <button class="btn-resume" onclick="paramAction('approve',this)" style="padding:.5rem;border-radius:.4rem;width:100%">✅ 승인 &amp; 적용</button>
+          <button class="btn-pause" onclick="paramAction('reject',this)" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 거부</button>
         </div>"""
     else:
         status_html = '<p style="color:#ef4444;font-weight:700;margin:.5rem 0">❌ 검증 실패 — 승인 불가</p>'
         buttons_html = """
         <div style="margin-top:.75rem">
-          <button class="btn-pause" onclick="paramAction('reject')" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 제안 삭제</button>
+          <button class="btn-pause" onclick="paramAction('reject',this)" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 제안 삭제</button>
         </div>"""
 
     return f"""<h2>⚙️ 자동튜너 제안 — 승인 대기</h2>
@@ -1839,7 +1846,7 @@ def _render_mode_switch_btn(mode: str) -> str:
     if mode.upper() == "LIVE":
         return (
             '<div class="mode-switch">'
-            '<button class="btn-to-paper" onclick="switchMode(\'paper\')" style="width:100%">'
+            '<button class="btn-to-paper" onclick="switchMode(\'paper\',this)" style="width:100%">'
             "📋 PAPER 모드로 전환</button></div>"
         )
 
@@ -1853,7 +1860,7 @@ def _render_mode_switch_btn(mode: str) -> str:
 
     return (
         '<div class="mode-switch">'
-        '<button class="btn-live" onclick="switchMode(\'live\')" style="width:100%">'
+        '<button class="btn-live" onclick="switchMode(\'live\',this)" style="width:100%">'
         "⚡ LIVE 모드로 전환</button></div>"
     )
 
