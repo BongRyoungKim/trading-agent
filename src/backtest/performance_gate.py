@@ -63,7 +63,7 @@ def _check_ratio_floor(name: str, baseline: float, candidate: float, ratio: floa
             name, passed,
             f"baseline is inf (no losing trades) -> candidate must also be inf, got {candidate}",
         )
-    required = baseline * ratio
+    required = baseline - abs(baseline) * (1 - ratio)
     passed = candidate >= required
     return CheckResult(
         name, passed,

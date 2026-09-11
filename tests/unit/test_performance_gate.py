@@ -115,6 +115,24 @@ class TestEvaluatePerformanceGate:
         pf_check = next(c for c in result.checks if c.name == "profit_factor")
         assert pf_check.passed is True
 
+    def test_negative_baseline_sharpe_identical_candidate_passes(self):
+        # Regression test: baseline and candidate Sharpe are exactly equal
+        # (-2.969), which must always be a PASS regardless of sign.
+        baseline = _metrics(sharpe_ratio=-2.969)
+        candidate = _metrics(sharpe_ratio=-2.969)
+        result = evaluate_performance_gate(baseline, candidate)
+        sharpe_check = next(c for c in result.checks if c.name == "sharpe_ratio")
+        assert sharpe_check.passed is True
+
+    def test_negative_baseline_sharpe_truly_worse_candidate_fails(self):
+        # Regression test (round 5 real case): candidate is genuinely worse
+        # than a negative baseline and must still fail the gate.
+        baseline = _metrics(sharpe_ratio=-2.969)
+        candidate = _metrics(sharpe_ratio=-4.110)
+        result = evaluate_performance_gate(baseline, candidate)
+        sharpe_check = next(c for c in result.checks if c.name == "sharpe_ratio")
+        assert sharpe_check.passed is False
+
     def test_summary_includes_all_check_names(self):
         m = _metrics()
         result = evaluate_performance_gate(m, m)
