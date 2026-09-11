@@ -406,7 +406,7 @@ reports/2026-09-08.md
 
 보고서 생성 시점마다 아래 조건을 평가해 필요 시 전략/리스크 파라미터를 자동 조정한다:
 
-- 평가 조건: `param_review_20`, `wr_alert`(승률 경고), `pnl_alert`, `sl_review`, `walk_forward_50`
+- 평가 조건: `param_review_20`, `wr_alert`(승률 경고), `pnl_alert`, `sl_review`
 - 조정값은 `src/config/live_params.py`의 `PARAM_BOUNDS`로 범위가 clamp되고, 1회 조정폭은
   최대 ±20%(`MAX_STEP_FRACTION`)로 제한된다
 - 변경 이력: `reports/param_change_log.jsonl`

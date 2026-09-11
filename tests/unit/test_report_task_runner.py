@@ -134,11 +134,11 @@ class TestScheduledTaskRunnerInit:
 
     def test_save_state_persists(self, runner_env):
         runner1 = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
-        runner1._mark("walk_forward_50")
+        runner1._mark("param_review_20")
         runner1._save_state()
 
         runner2 = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
-        assert runner2._done("walk_forward_50")
+        assert runner2._done("param_review_20")
 
     def test_corrupted_state_file_handled(self, runner_env):
         state_file = runner_env / ".task_state.json"
@@ -205,22 +205,6 @@ class TestScheduledTaskRunnerRun:
         results = runner.run(stats)
         assert any("sl_review" in r.task_id for r in results)
 
-    def test_walk_forward_triggered_at_50_trades(self, runner_env):
-        runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
-        stats = _mr_stats(total=55, wins=30, pnl=3000.0, sig=25, sl=15, tp=15)
-        stats["wr_pct"] = 54.5
-        results = runner.run(stats)
-        assert any(r.task_id == "walk_forward_50" for r in results)
-
-    def test_walk_forward_creates_trigger_file(self, runner_env):
-        runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
-        stats = _mr_stats(total=55, wins=30, pnl=3000.0)
-        stats["wr_pct"] = 54.5
-        results = runner.run(stats)
-        wf_result = next((r for r in results if r.task_id == "walk_forward_50"), None)
-        if wf_result and wf_result.output_path:
-            assert Path(wf_result.output_path).exists()
-
     def test_all_results_are_action_result_instances(self, runner_env):
         runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
         stats = _mr_stats(total=55, wins=30, pnl=3000.0)
@@ -237,7 +221,7 @@ class TestScheduledTaskRunnerRun:
         state_file = runner_env / ".task_state.json"
         assert state_file.exists()
         state = json.loads(state_file.read_text(encoding="utf-8"))
-        assert "walk_forward_50" in state
+        assert "param_review_20" in state
 
     def test_wr_alert_saves_json_file(self, runner_env):
         runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))

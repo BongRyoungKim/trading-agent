@@ -9,7 +9,6 @@ _pending_tasks()에 나열된 조건을 실제로 평가하고, 조건 충족 �
   - wr_alert         : WR < 40% (10건+) → mr_rsi_oversold_fast/slow↓, mr_vol_mult↑ 자동 적용
   - pnl_alert        : 누적 PnL < 0 (10건+) → tp_rr_multiplier↑ 자동 적용
   - sl_review        : SL 청산 비율 과다 (5건+) → sl_floor_pct↑ 자동 적용
-  - walk_forward_50  : 50건 달성 → Walk-Forward 실행 트리거 파일 생성
 
 wr_alert / pnl_alert / sl_review 는 src.config.live_params.propose_pending() 을
 통해 조정안을 제안만 한다 — PARAM_BOUNDS 클램프와 ±20% 1회 변동폭 제한은
@@ -105,11 +104,6 @@ class ScheduledTaskRunner:
             if not self._done(key):
                 results.append(self._run_sl_review(sl_count, sig_count, tp_count))
                 self._mark(key)
-
-        # ⑤ 50건 Walk-Forward 트리거 (1회)
-        if total >= 50 and not self._done("walk_forward_50"):
-            results.append(self._trigger_walk_forward())
-            self._mark("walk_forward_50")
 
         self._save_state()
         return results
@@ -290,25 +284,6 @@ class ScheduledTaskRunner:
             detail = f"SL 청산 {sl_ratio:.1f}% 과다 — sl_floor_pct가 이미 안전범위 경계라 제안할 조정 없음"
         logger.warning("High SL ratio alert", sl_ratio=sl_ratio, proposed=result, path=str(out))
         return ActionResult("sl_review", "SL 비율 경보 — SL 허용폭 완화안 제안", "executed", detail, str(out))
-
-    def _trigger_walk_forward(self) -> ActionResult:
-        """50건 달성 — Walk-Forward 실행 트리거 파일 생성."""
-        trigger = {
-            "date":    str(date.today()),
-            "status":  "pending",
-            "command": "python scripts/backtest_swing.py --walk-forward",
-            "note":    "50건 달성. Walk-Forward 최적화 수동 실행 필요. 예상 소요: 30분.",
-        }
-        out = REC_DIR / f"{date.today()}-walk-forward-trigger.json"
-        out.write_text(json.dumps(trigger, ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.info("Walk-Forward trigger file created", path=str(out))
-        return ActionResult(
-            "walk_forward_50",
-            "50건 달성 — Walk-Forward 트리거",
-            "executed",
-            "50건 달성. Walk-Forward 최적화 준비 완료 — 수동 실행 대기.",
-            str(out),
-        )
 
     # ── State persistence ─────────────────────────────────────────────────────
 
