@@ -247,6 +247,18 @@ class TradingEngine:
         self._symbol_blacklist = frozenset(symbols)
         logger.info("Symbol blacklist updated", blacklist=sorted(self._symbol_blacklist))
 
+    def _notify_if_cooldown_triggered(self, cooldown_newly_triggered: bool) -> None:
+        """Send an immediate critical Telegram alert the moment the
+        consecutive-loss cooldown is newly entered (see
+        RiskManager.on_position_closed). No-op otherwise."""
+        if not cooldown_newly_triggered:
+            return
+        limit = self._risk_manager.consecutive_loss_limit
+        cooldown_min = self._risk_manager.consecutive_loss_cooldown_minutes
+        self._telegram.send_risk_alert(
+            f"연속 손실 {limit}회 도달 — 신규 진입이 {cooldown_min}분간 정지됩니다."
+        )
+
     def _check_exit_conditions(self, symbol: str) -> bool:
         """
         Check and execute SL/TP/trailing/time-stop/dust removal for an open position.
@@ -270,7 +282,7 @@ class TradingEngine:
         # ── dust position removal (value ≤ 5,001 KRW) ─────────────────────
         if pos.amount * price <= self._DUST_THRESHOLD_KRW:
             pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
-            self._risk_manager.on_position_closed(pnl)
+            self._notify_if_cooldown_triggered(self._risk_manager.on_position_closed(pnl))
             logger.info(
                 "Dust position removed",
                 symbol=symbol,
@@ -389,8 +401,10 @@ class TradingEngine:
                 logger.warning(f"KRW balance sync failed: {exc}")
 
         try:
+            _tick_started = time.monotonic()
             with self._circuit_breaker:
                 self._process_symbol(symbol)
+            get_health_state().record_latency_ms((time.monotonic() - _tick_started) * 1000)
         except CircuitBreakerOpenError as exc:
             logger.warning(
                 "Tick skipped — circuit breaker is OPEN",
@@ -973,7 +987,7 @@ class TradingEngine:
                         f"⚠️ {symbol} 잔고 0 확인 — 고스트 포지션 제거. 거래소 계좌를 확인하세요."
                     )
                     pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
-                    self._risk_manager.on_position_closed(pnl)
+                    self._notify_if_cooldown_triggered(self._risk_manager.on_position_closed(pnl))
                     self._journal.record(
                         TradeRecord(
                             symbol=symbol,
@@ -1006,7 +1020,7 @@ class TradingEngine:
                             f"⚠️ {symbol} 잔고 0 확인 — 고스트 포지션 제거. 거래소 계좌를 확인하세요."
                         )
                         pnl = self._portfolio.close_position(symbol, price, commission=Decimal("0"))
-                        self._risk_manager.on_position_closed(pnl)
+                        self._notify_if_cooldown_triggered(self._risk_manager.on_position_closed(pnl))
                         self._journal.record(
                             TradeRecord(
                                 symbol=symbol,
@@ -1069,7 +1083,7 @@ class TradingEngine:
         pnl = self._portfolio.close_position(symbol, fill_price, commission=commission)
         cost_basis = position.entry_price * position.amount
         pnl_pct = float(pnl / cost_basis * 100) if cost_basis else 0.0
-        self._risk_manager.on_position_closed(pnl)
+        self._notify_if_cooldown_triggered(self._risk_manager.on_position_closed(pnl))
 
         self._journal.record(
             TradeRecord(
@@ -1547,6 +1561,18 @@ class TradingEngine:
                         "stop_loss": float(pos.stop_loss) if pos.stop_loss else 0.0,
                         "take_profit": float(pos.take_profit) if pos.take_profit else 0.0,
                     })
+
+                # ── Balance anomaly detection (feeds src/health.py /health) ──
+                total_equity = float(report["cash"]) + sum(
+                    p["current_price"] * p["amount"] for p in positions_detail
+                )
+                anomaly = get_health_state().record_equity_snapshot(total_equity)
+                if anomaly is not None:
+                    self._telegram.send_risk_alert(
+                        f"잔고 급감 감지: {anomaly['previous']:,.0f} → "
+                        f"{anomaly['current']:,.0f} KRW "
+                        f"({anomaly['drop_pct']:.1f}% 감소). 거래소 계좌를 확인하세요."
+                    )
 
                 self._telegram.flush_summary(
                     mode=self._mode,

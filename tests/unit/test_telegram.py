@@ -115,3 +115,129 @@ class TestTelegramFormatted:
     def test_disabled_formatted_methods_return_false(self, disabled_client: TelegramClient) -> None:
         assert disabled_client.send_order_filled("BTC/USDT", "buy", 0.01, 50000.0) is False
         assert disabled_client.send_risk_alert("test") is False
+
+
+class TestCriticalAlertsBypassHourlyBuffer:
+    """send_risk_alert / send_error are 'critical' tier — always sent immediately,
+    even when hourly_summary=True (they are ALSO queued so the hourly digest's
+    event list stays complete)."""
+
+    def _client(self) -> TelegramClient:
+        return TelegramClient(bot_token="tok", chat_id="123", hourly_summary=True)
+
+    def test_risk_alert_sent_immediately_in_hourly_mode(self) -> None:
+        client = self._client()
+        with patch.object(client, "send", return_value=True) as mock_send:
+            result = client.send_risk_alert("Drawdown limit reached")
+        mock_send.assert_called_once()
+        assert result is True
+
+    def test_risk_alert_also_queued_for_digest(self) -> None:
+        client = self._client()
+        with patch.object(client, "send", return_value=True):
+            client.send_risk_alert("Drawdown limit reached")
+        assert any("Drawdown" in e for e in client._buffer)  # noqa: SLF001
+
+    def test_error_sent_immediately_in_hourly_mode(self) -> None:
+        client = self._client()
+        with patch.object(client, "send", return_value=True) as mock_send:
+            result = client.send_error("Connection failed", context="get_ticker")
+        mock_send.assert_called_once()
+        assert result is True
+
+    def test_error_also_queued_for_digest(self) -> None:
+        client = self._client()
+        with patch.object(client, "send", return_value=True):
+            client.send_error("Connection failed", context="get_ticker")
+        assert any("Connection failed" in e for e in client._buffer)  # noqa: SLF001
+
+
+class TestNotifyLevelFiltering:
+    """notify_level='critical' suppresses info-tier notifications entirely."""
+
+    def test_info_method_suppressed_when_critical_only(self) -> None:
+        client = TelegramClient(
+            bot_token="tok", chat_id="123", notify_level="critical"
+        )
+        with patch.object(client, "send", return_value=True) as mock_send:
+            result = client.send_order_filled("BTC/USDT", "buy", 0.01, 50000.0)
+        mock_send.assert_not_called()
+        assert result is True
+
+    def test_critical_alert_not_suppressed_when_critical_only(self) -> None:
+        client = TelegramClient(
+            bot_token="tok", chat_id="123", notify_level="critical"
+        )
+        with patch.object(client, "send", return_value=True) as mock_send:
+            client.send_risk_alert("Drawdown limit reached")
+        mock_send.assert_called_once()
+
+    def test_info_method_sent_when_level_all(self) -> None:
+        client = TelegramClient(bot_token="tok", chat_id="123", notify_level="all")
+        with patch.object(client, "send", return_value=True) as mock_send:
+            client.send_order_filled("BTC/USDT", "buy", 0.01, 50000.0)
+        mock_send.assert_called_once()
+
+
+class TestQuietHoursFiltering:
+    """quiet_hours suppresses info-tier notifications while active; critical
+    alerts always go through regardless of quiet hours."""
+
+    def _quiet_hours(self, is_quiet: bool):
+        qh = MagicMock()
+        qh.is_quiet.return_value = is_quiet
+        return qh
+
+    def test_info_method_suppressed_during_quiet_hours(self) -> None:
+        client = TelegramClient(
+            bot_token="tok", chat_id="123", quiet_hours=self._quiet_hours(True)
+        )
+        with patch.object(client, "send", return_value=True) as mock_send:
+            result = client.send_order_filled("BTC/USDT", "buy", 0.01, 50000.0)
+        mock_send.assert_not_called()
+        assert result is True
+
+    def test_info_method_sent_outside_quiet_hours(self) -> None:
+        client = TelegramClient(
+            bot_token="tok", chat_id="123", quiet_hours=self._quiet_hours(False)
+        )
+        with patch.object(client, "send", return_value=True) as mock_send:
+            client.send_order_filled("BTC/USDT", "buy", 0.01, 50000.0)
+        mock_send.assert_called_once()
+
+    def test_critical_alert_not_suppressed_during_quiet_hours(self) -> None:
+        client = TelegramClient(
+            bot_token="tok", chat_id="123", quiet_hours=self._quiet_hours(True)
+        )
+        with patch.object(client, "send", return_value=True) as mock_send:
+            client.send_risk_alert("Drawdown limit reached")
+        mock_send.assert_called_once()
+
+
+class TestFlushSummarySuppression:
+    """When suppressed (critical-only or quiet hours), flush_summary must not
+    send AND must not drop the buffered events — they carry over to the next
+    (non-suppressed) flush."""
+
+    def test_suppressed_flush_does_not_send(self) -> None:
+        client = TelegramClient(
+            bot_token="tok", chat_id="123", hourly_summary=True, notify_level="critical"
+        )
+        client._queue("some earlier event")  # noqa: SLF001
+        with patch.object(client, "send", return_value=True) as mock_send:
+            client.flush_summary()
+        mock_send.assert_not_called()
+
+    def test_suppressed_flush_preserves_buffer_for_next_flush(self) -> None:
+        client = TelegramClient(
+            bot_token="tok", chat_id="123", hourly_summary=True, notify_level="critical"
+        )
+        client._queue("order filled XYZ")  # noqa: SLF001
+        with patch.object(client, "send", return_value=True):
+            client.flush_summary()  # suppressed — should not clear buffer
+
+        client._notify_level = "all"  # simulate suppression lifting  # noqa: SLF001
+        with patch.object(client, "send", return_value=True) as mock_send:
+            client.flush_summary()
+        text = mock_send.call_args[0][0]
+        assert "order filled XYZ" in text

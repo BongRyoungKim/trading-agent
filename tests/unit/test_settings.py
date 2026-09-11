@@ -90,6 +90,37 @@ class TestLiveModeCredentialGate:
             Settings()
 
 
+class TestNotificationSettings:
+    def test_default_notify_level_is_all(self, mock_env: None) -> None:
+        settings = get_settings()
+        assert settings.telegram_notify_level == "all"
+
+    def test_default_quiet_hours_is_empty(self, mock_env: None) -> None:
+        settings = get_settings()
+        assert settings.telegram_quiet_hours_utc == ""
+
+    def test_notify_level_critical_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TELEGRAM_NOTIFY_LEVEL", "critical")
+        settings = Settings()
+        assert settings.telegram_notify_level == "critical"
+
+    def test_notify_level_invalid_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TELEGRAM_NOTIFY_LEVEL", "verbose")
+        with pytest.raises(ValidationError):
+            Settings()
+
+    def test_quiet_hours_custom_value_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TELEGRAM_QUIET_HOURS_UTC", "22:00-07:00")
+        settings = Settings()
+        assert settings.telegram_quiet_hours_utc == "22:00-07:00"
+
+
 class TestSingleton:
     def test_get_settings_returns_same_instance(self, mock_env: None) -> None:
         s1 = get_settings()

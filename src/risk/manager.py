@@ -218,10 +218,20 @@ class RiskManager:
         self._state.open_positions += 1
         logger.debug("Position opened", open_positions=self._state.open_positions)
 
-    def on_position_closed(self, pnl: Decimal) -> None:
+    def on_position_closed(self, pnl: Decimal) -> bool:
+        """Update state after a trade closes.
+
+        Returns:
+            True only at the exact moment the consecutive-loss cooldown is
+            newly triggered by this call (i.e. the transition from "not in
+            cooldown" to "in cooldown"). False in every other case, including
+            while already in an active cooldown. Purely observational — does
+            not alter the risk logic or thresholds in any way.
+        """
         self._state.open_positions = max(0, self._state.open_positions - 1)
         self._state.record_trade_result(pnl)
 
+        cooldown_newly_triggered = False
         if (
             self._consecutive_loss_limit > 0
             and self._state.consecutive_losses >= self._consecutive_loss_limit
@@ -230,6 +240,7 @@ class RiskManager:
             self._state.cooldown_until = datetime.now(UTC) + timedelta(
                 minutes=self._consecutive_loss_cooldown_minutes
             )
+            cooldown_newly_triggered = True
             logger.warning(
                 "Consecutive-loss circuit breaker triggered — new entries paused",
                 consecutive_losses=self._state.consecutive_losses,
@@ -242,6 +253,7 @@ class RiskManager:
             capital=float(self._state.capital),
             drawdown_pct=round(self._state.current_drawdown_pct * 100, 2),
         )
+        return cooldown_newly_triggered
 
     # ── Stop-loss helpers ─────────────────────────────────────────────────────
 

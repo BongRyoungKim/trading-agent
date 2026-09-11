@@ -317,3 +317,105 @@ class TestMainHeartbeatFlag:
         call_kwargs = mock_engine.start.call_args[1]
         # Default heartbeat_interval=3600, but 0 maps to None
         assert "heartbeat_interval" in call_kwargs
+
+
+# ── Consecutive-loss cooldown — immediate critical alert ─────────────────────
+
+class TestCooldownAlert:
+    def test_helper_sends_alert_when_triggered(self):
+        engine, telegram = _make_engine()
+        engine._notify_if_cooldown_triggered(True)
+        telegram.send_risk_alert.assert_called_once()
+
+    def test_helper_does_nothing_when_not_triggered(self):
+        engine, telegram = _make_engine()
+        engine._notify_if_cooldown_triggered(False)
+        telegram.send_risk_alert.assert_not_called()
+
+    def test_helper_alert_message_mentions_limit_and_cooldown(self):
+        engine, telegram = _make_engine()
+        engine._risk_manager.consecutive_loss_limit = 3
+        engine._risk_manager.consecutive_loss_cooldown_minutes = 720
+        engine._notify_if_cooldown_triggered(True)
+        msg = telegram.send_risk_alert.call_args[0][0]
+        assert "3" in msg
+        assert "720" in msg
+
+    def test_dust_removal_triggers_immediate_alert_on_cooldown(self):
+        """End-to-end: a real on_position_closed() call site (dust removal in
+        _check_exit_conditions) must wire its return value into the helper."""
+        engine, telegram = _make_engine()
+        engine._risk_manager.consecutive_loss_limit = 1
+        engine._risk_manager.consecutive_loss_cooldown_minutes = 60
+        engine._portfolio.open_position(
+            "BTC/USDT", "buy", Decimal("0.0001"), Decimal("100"),
+        )
+        engine._exchange.get_ticker.return_value = MagicMock(last=Decimal("1"))
+
+        engine._check_exit_conditions("BTC/USDT")
+
+        telegram.send_risk_alert.assert_called_once()
+
+
+# ── Exchange latency recording (feeds src/health.py) ──────────────────────────
+
+class TestExchangeLatencyRecording:
+    def test_tick_records_latency_on_success(self):
+        engine, _telegram = _make_engine()
+        with patch.object(engine, "_process_symbol"), \
+             patch("src.engine.get_health_state") as mock_get_health:
+            mock_state = MagicMock()
+            mock_get_health.return_value = mock_state
+            engine.tick("BTC/USDT")
+        mock_state.record_latency_ms.assert_called_once()
+        elapsed_ms = mock_state.record_latency_ms.call_args[0][0]
+        assert elapsed_ms >= 0
+
+    def test_tick_does_not_record_latency_on_failure(self):
+        engine, _telegram = _make_engine()
+        with patch.object(engine, "_process_symbol", side_effect=RuntimeError("boom")), \
+             patch("src.engine.get_health_state") as mock_get_health:
+            mock_state = MagicMock()
+            mock_get_health.return_value = mock_state
+            engine.tick("BTC/USDT")
+        mock_state.record_latency_ms.assert_not_called()
+
+
+# ── Balance anomaly detection (30-min heartbeat cadence) ──────────────────────
+
+class TestBalanceAnomalyAlert:
+    def test_heartbeat_records_equity_snapshot(self):
+        engine, telegram = _make_engine()
+        telegram._hourly_summary = True
+        with patch("src.engine.get_health_state") as mock_get_health:
+            mock_state = MagicMock()
+            mock_state.record_equity_snapshot.return_value = None
+            mock_get_health.return_value = mock_state
+            engine._send_heartbeat()
+        mock_state.record_equity_snapshot.assert_called_once()
+        equity_arg = mock_state.record_equity_snapshot.call_args[0][0]
+        assert equity_arg == pytest.approx(10000.0)  # initial cash, no open positions
+
+    def test_heartbeat_sends_critical_alert_on_anomaly(self):
+        engine, telegram = _make_engine()
+        telegram._hourly_summary = True
+        with patch("src.engine.get_health_state") as mock_get_health:
+            mock_state = MagicMock()
+            mock_state.record_equity_snapshot.return_value = {
+                "previous": 10000.0, "current": 6000.0, "drop_pct": 40.0,
+            }
+            mock_get_health.return_value = mock_state
+            engine._send_heartbeat()
+        telegram.send_risk_alert.assert_called_once()
+        msg = telegram.send_risk_alert.call_args[0][0]
+        assert "40" in msg
+
+    def test_heartbeat_no_alert_when_no_anomaly(self):
+        engine, telegram = _make_engine()
+        telegram._hourly_summary = True
+        with patch("src.engine.get_health_state") as mock_get_health:
+            mock_state = MagicMock()
+            mock_state.record_equity_snapshot.return_value = None
+            mock_get_health.return_value = mock_state
+            engine._send_heartbeat()
+        telegram.send_risk_alert.assert_not_called()

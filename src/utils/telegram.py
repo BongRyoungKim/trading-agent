@@ -12,9 +12,11 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
+
+from src.utils.quiet_hours import QuietHours
 
 
 class TelegramClient:
@@ -27,11 +29,20 @@ class TelegramClient:
 
     _BASE_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
-    def __init__(self, bot_token: str, chat_id: str, hourly_summary: bool = False) -> None:
+    def __init__(
+        self,
+        bot_token: str,
+        chat_id: str,
+        hourly_summary: bool = False,
+        notify_level: Literal["all", "critical"] = "all",
+        quiet_hours: QuietHours | None = None,
+    ) -> None:
         self._token = bot_token
         self._chat_id = chat_id
         self._enabled = bool(bot_token and chat_id)
         self._hourly_summary = hourly_summary
+        self._notify_level = notify_level
+        self._quiet_hours = quiet_hours
         self._buffer: list[str] = []
         self._buffer_lock = threading.Lock()
         if not self._enabled:
@@ -40,6 +51,20 @@ class TelegramClient:
     @property
     def is_enabled(self) -> bool:
         return self._enabled
+
+    # ── Notification level / quiet hours ──────────────────────────────────────
+
+    def _suppress_info(self) -> bool:
+        """
+        True if info-tier notifications should be suppressed right now.
+        Critical-tier alerts (send_risk_alert / send_error) always bypass this.
+        """
+        if getattr(self, "_notify_level", "all") == "critical":
+            return True
+        quiet_hours = getattr(self, "_quiet_hours", None)
+        if quiet_hours is not None and quiet_hours.is_quiet():
+            return True
+        return False
 
     def send(self, text: str, parse_mode: str = "HTML") -> bool:
         """Send a plain text message. Never raises."""
@@ -94,9 +119,16 @@ class TelegramClient:
     ) -> bool:
         """Compose and send the hourly summary, then clear the event buffer.
 
+        If suppressed (notify_level='critical' or active quiet hours), the
+        buffer is left untouched so events carry over to the next flush —
+        suppression must never silently drop events.
+
         positions_detail: list of dicts with keys:
             symbol, entry_price, current_price, amount, pnl, pnl_pct, stop_loss, take_profit
         """
+        if self._suppress_info():
+            return False
+
         with self._buffer_lock:
             events = list(self._buffer)
             self._buffer.clear()
@@ -161,6 +193,8 @@ class TelegramClient:
         price: float,
         order_id: str = "",
     ) -> bool:
+        if self._suppress_info():
+            return True  # suppressed by notify_level/quiet hours
         emoji = "🟢" if side == "buy" else "🔴"
         line = f"{emoji} {side.upper()} <code>{symbol}</code> {amount:.6f} @ ₩{price:,.0f}"
         if getattr(self, '_hourly_summary', False):
@@ -185,6 +219,8 @@ class TelegramClient:
         pnl: float,
         pnl_pct: float,
     ) -> bool:
+        if self._suppress_info():
+            return True  # suppressed by notify_level/quiet hours
         emoji = "✅" if pnl >= 0 else "❌"
         sign = "+" if pnl >= 0 else ""
         line = f"{emoji} CLOSE <code>{symbol}</code> {sign}₩{pnl:,.0f} ({sign}{pnl_pct:.2f}%)"
@@ -200,16 +236,18 @@ class TelegramClient:
         return self.send(text)
 
     def send_risk_alert(self, message: str) -> bool:
+        """Critical tier — always sent immediately, regardless of
+        hourly_summary/notify_level/quiet hours. Also queued (when
+        hourly_summary is on) so the hourly digest's event list stays complete."""
         if getattr(self, '_hourly_summary', False):
             self._queue(f"⚠️ {message}")
-            return True
         return self.send(f"⚠️ <b>RISK ALERT</b>\n{message}")
 
     def send_error(self, error: str, context: str = "") -> bool:
+        """Critical tier — see send_risk_alert docstring."""
         if getattr(self, '_hourly_summary', False):
             ctx = f"[{context}] " if context else ""
             self._queue(f"🚨 {ctx}{error[:80]}")
-            return True
         text = f"🚨 <b>ERROR</b>\n"
         if context:
             text += f"Context: {context}\n"
@@ -217,6 +255,8 @@ class TelegramClient:
         return self.send(text)
 
     def send_startup(self, mode: str, exchange: str, symbols: list[str], strategy: str) -> bool:
+        if self._suppress_info():
+            return True  # suppressed by notify_level/quiet hours
         if getattr(self, '_hourly_summary', False):
             return True  # suppress
         text = (
@@ -234,6 +274,8 @@ class TelegramClient:
         win_rate: float,
         realized_pnl: float,
     ) -> bool:
+        if self._suppress_info():
+            return True  # suppressed by notify_level/quiet hours
         if getattr(self, '_hourly_summary', False):
             return True  # suppress
         hours, rem = divmod(int(session_seconds), 3600)
@@ -255,6 +297,8 @@ class TelegramClient:
         total_trades: int,
         win_rate: float,
     ) -> bool:
+        if self._suppress_info():
+            return True  # suppressed by notify_level/quiet hours
         if getattr(self, '_hourly_summary', False):
             return True  # suppress — covered by hourly summary
         pnl_pct = (realized_pnl / initial_capital * 100) if initial_capital else 0.0
@@ -268,6 +312,8 @@ class TelegramClient:
         )
 
     def send_heartbeat(self, open_positions: int, cash: float, circuit_state: str) -> bool:
+        if self._suppress_info():
+            return True  # suppressed by notify_level/quiet hours
         if getattr(self, '_hourly_summary', False):
             return True  # suppress — replaced by flush_summary
         state_emoji = "🟢" if circuit_state == "CLOSED" else "🔴"
@@ -281,9 +327,12 @@ class TelegramClient:
 def get_telegram_client() -> TelegramClient:
     """Build TelegramClient from application settings."""
     from src.config.settings import get_settings
+    from src.utils.quiet_hours import quiet_hours_from_settings
     settings = get_settings()
     return TelegramClient(
         bot_token=settings.telegram_bot_token,
         chat_id=settings.telegram_chat_id,
         hourly_summary=True,
+        notify_level=settings.telegram_notify_level,
+        quiet_hours=quiet_hours_from_settings(settings),
     )

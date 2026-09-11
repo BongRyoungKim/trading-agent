@@ -112,6 +112,91 @@ def _get(port: int, path: str) -> tuple[int, dict]:
         return exc.code, json.loads(exc.read())
 
 
+class TestLatencyRecording:
+    def _fresh(self) -> HealthState:
+        return HealthState()
+
+    def test_no_latency_recorded_yet(self):
+        s = self._fresh()
+        assert s.latency_snapshot()["exchange_latency_ms"] is None
+        assert s.latency_snapshot()["exchange_latency_status"] == "unknown"
+
+    def test_fast_latency_is_ok(self):
+        s = self._fresh()
+        s.record_latency_ms(120.0)
+        snap = s.latency_snapshot()
+        assert snap["exchange_latency_ms"] == 120.0
+        assert snap["exchange_latency_status"] == "ok"
+
+    def test_slow_latency_flagged(self):
+        s = self._fresh()
+        s.record_latency_ms(7000.0)
+        snap = s.latency_snapshot()
+        assert snap["exchange_latency_ms"] == 7000.0
+        assert snap["exchange_latency_status"] == "slow"
+
+    def test_latest_value_wins(self):
+        s = self._fresh()
+        s.record_latency_ms(7000.0)
+        s.record_latency_ms(100.0)
+        snap = s.latency_snapshot()
+        assert snap["exchange_latency_ms"] == 100.0
+        assert snap["exchange_latency_status"] == "ok"
+
+
+class TestBalanceAnomalyDetection:
+    def _fresh(self) -> HealthState:
+        return HealthState()
+
+    def test_first_snapshot_never_anomaly(self):
+        s = self._fresh()
+        result = s.record_equity_snapshot(1_000_000.0)
+        assert result is None
+
+    def test_no_anomaly_on_small_change(self):
+        s = self._fresh()
+        s.record_equity_snapshot(1_000_000.0)
+        result = s.record_equity_snapshot(950_000.0)  # -5%, normal drawdown noise
+        assert result is None
+
+    def test_no_anomaly_on_increase(self):
+        s = self._fresh()
+        s.record_equity_snapshot(1_000_000.0)
+        result = s.record_equity_snapshot(2_000_000.0)
+        assert result is None
+
+    def test_anomaly_on_large_drop(self):
+        s = self._fresh()
+        s.record_equity_snapshot(1_000_000.0)
+        result = s.record_equity_snapshot(600_000.0)  # -40%
+        assert result is not None
+        assert result["previous"] == 1_000_000.0
+        assert result["current"] == 600_000.0
+        assert result["drop_pct"] == pytest.approx(40.0)
+
+    def test_anomaly_reflected_in_snapshot(self):
+        s = self._fresh()
+        s.record_equity_snapshot(1_000_000.0)
+        s.record_equity_snapshot(600_000.0)
+        snap = s.balance_snapshot()
+        assert snap["balance_anomaly"] is True
+        assert snap["balance_anomaly_detail"]["drop_pct"] == pytest.approx(40.0)
+
+    def test_no_anomaly_reflected_in_snapshot_by_default(self):
+        s = self._fresh()
+        snap = s.balance_snapshot()
+        assert snap["balance_anomaly"] is False
+        assert snap["balance_anomaly_detail"] is None
+
+    def test_subsequent_stable_snapshot_clears_anomaly_flag(self):
+        s = self._fresh()
+        s.record_equity_snapshot(1_000_000.0)
+        s.record_equity_snapshot(600_000.0)  # anomaly
+        s.record_equity_snapshot(590_000.0)  # small change vs new baseline — no new anomaly
+        snap = s.balance_snapshot()
+        assert snap["balance_anomaly"] is False
+
+
 class TestHealthEndpoint:
     def test_health_returns_200(self, health_server):
         port, _ = health_server
@@ -132,6 +217,30 @@ class TestHealthEndpoint:
         port, _ = health_server
         code, _ = _get(port, "/unknown")
         assert code == 404
+
+    def test_health_still_returns_200_with_existing_fields(self, health_server):
+        """Additive fields must never change the pre-existing contract that
+        Docker HEALTHCHECK relies on (always 200, status='ok', timestamp)."""
+        port, _ = health_server
+        get_health_state().record_latency_ms(150.0)
+        code, body = _get(port, "/health")
+        assert code == 200
+        assert body["status"] == "ok"
+        assert "timestamp" in body
+
+    def test_health_includes_latency_fields(self, health_server):
+        port, _ = health_server
+        get_health_state().record_latency_ms(150.0)
+        _, body = _get(port, "/health")
+        assert body["exchange_latency_ms"] == 150.0
+        assert body["exchange_latency_status"] == "ok"
+
+    def test_health_includes_balance_anomaly_fields(self, health_server):
+        port, _ = health_server
+        _, body = _get(port, "/health")
+        assert "balance_anomaly" in body
+        assert isinstance(body["balance_anomaly"], bool)
+        assert "balance_anomaly_detail" in body
 
 
 class TestReadyEndpoint:

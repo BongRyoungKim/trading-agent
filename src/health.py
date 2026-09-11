@@ -45,6 +45,16 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from loguru import logger
 
+# Round-trip latency at/above this is flagged "slow" in /health. Generous on
+# purpose — a normal tick (OHLCV + ticker fetch) is a few hundred ms; this
+# only fires on genuinely degraded exchange responsiveness, not jitter.
+_LATENCY_SLOW_THRESHOLD_MS = 5000.0
+
+# Equity drop (vs. the previous heartbeat snapshot, ~30 min apart) at/above
+# this fraction is flagged as a balance anomaly. Deliberately large — normal
+# position sizing/drawdown never approaches this in one heartbeat interval.
+_EQUITY_DROP_ANOMALY_PCT = 0.30
+
 # ── Health state ──────────────────────────────────────────────────────────────
 
 class HealthState:
@@ -54,6 +64,9 @@ class HealthState:
         self._lock = threading.Lock()
         self._ready = False
         self._details: dict = {}
+        self._latency_ms: float | None = None
+        self._prev_equity: float | None = None
+        self._last_anomaly_detail: dict | None = None
 
     def set_ready(self, details: dict | None = None) -> None:
         """Mark the engine as ready. Optional *details* appear in /ready response."""
@@ -76,6 +89,55 @@ class HealthState:
         """Return a copy of the current detail dict."""
         with self._lock:
             return dict(self._details)
+
+    # ── Exchange latency ──────────────────────────────────────────────────────
+
+    def record_latency_ms(self, ms: float) -> None:
+        """Record the most recent successful exchange round-trip time."""
+        with self._lock:
+            self._latency_ms = ms
+
+    def latency_snapshot(self) -> dict:
+        """Return the latest latency reading, or 'unknown' if none recorded yet."""
+        with self._lock:
+            ms = self._latency_ms
+        if ms is None:
+            return {"exchange_latency_ms": None, "exchange_latency_status": "unknown"}
+        status = "slow" if ms >= _LATENCY_SLOW_THRESHOLD_MS else "ok"
+        return {"exchange_latency_ms": ms, "exchange_latency_status": status}
+
+    # ── Balance anomaly detection ─────────────────────────────────────────────
+
+    def record_equity_snapshot(self, equity: float) -> dict | None:
+        """
+        Record a total-equity snapshot (cash + mark-to-market positions),
+        typically called once per heartbeat (~30 min cadence).
+
+        Returns an anomaly detail dict {"previous", "current", "drop_pct"}
+        only at the moment a drop of _EQUITY_DROP_ANOMALY_PCT or more versus
+        the previous snapshot is detected. Returns None otherwise (including
+        the very first snapshot, which has nothing to compare against).
+        """
+        with self._lock:
+            previous = self._prev_equity
+            anomaly: dict | None = None
+            if previous is not None and previous > 0:
+                drop_pct = (previous - equity) / previous * 100
+                if drop_pct >= _EQUITY_DROP_ANOMALY_PCT * 100:
+                    anomaly = {
+                        "previous": previous,
+                        "current": equity,
+                        "drop_pct": drop_pct,
+                    }
+            self._prev_equity = equity
+            self._last_anomaly_detail = anomaly
+            return anomaly
+
+    def balance_snapshot(self) -> dict:
+        """Return whether the most recent equity snapshot was an anomaly."""
+        with self._lock:
+            detail = self._last_anomaly_detail
+        return {"balance_anomaly": detail is not None, "balance_anomaly_detail": detail}
 
 
 # Module-level singleton — the engine and main.py share this instance.
@@ -113,9 +175,13 @@ class _HealthHandler(BaseHTTPRequestHandler):
         state = get_health_state()
 
         if self.path == "/health":
-            body = json.dumps(
-                {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
-            ).encode()
+            # Additive fields only — status/code/timestamp keys are unchanged
+            # so the Dockerfile HEALTHCHECK contract (always 200 while the
+            # process is alive) is never affected by these checks.
+            payload = {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
+            payload.update(state.latency_snapshot())
+            payload.update(state.balance_snapshot())
+            body = json.dumps(payload).encode()
             code = 200
         elif self.path == "/ready":
             if state.is_ready:

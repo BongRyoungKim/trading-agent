@@ -364,3 +364,42 @@ class TestRiskManagerCircuitBreakerBehavior:
         rm = RiskManager(settings, state)
         rm.on_position_closed(Decimal("300"))
         rm.check_can_open_position()  # should not raise
+
+
+class TestOnPositionClosedReturnValue:
+    """on_position_closed() returns True only at the exact moment the
+    consecutive-loss cooldown is newly triggered — purely observational,
+    does not change any risk logic/thresholds."""
+
+    def test_returns_false_when_no_loss(self) -> None:
+        rm = RiskManager(_make_settings(), _make_portfolio())
+        assert rm.on_position_closed(Decimal("300")) is False
+
+    def test_returns_false_below_limit(self) -> None:
+        rm = RiskManager(_make_settings(), _make_portfolio(), consecutive_loss_limit=3)
+        assert rm.on_position_closed(Decimal("-100")) is False
+        assert rm.on_position_closed(Decimal("-100")) is False
+
+    def test_returns_true_exactly_when_cooldown_newly_triggered(self) -> None:
+        rm = RiskManager(
+            _make_settings(), _make_portfolio(), consecutive_loss_limit=3,
+            consecutive_loss_cooldown_minutes=60,
+        )
+        assert rm.on_position_closed(Decimal("-100")) is False
+        assert rm.on_position_closed(Decimal("-100")) is False
+        assert rm.on_position_closed(Decimal("-100")) is True  # 3rd loss triggers it
+
+    def test_returns_false_on_subsequent_losses_while_already_in_cooldown(self) -> None:
+        rm = RiskManager(
+            _make_settings(), _make_portfolio(), consecutive_loss_limit=2,
+            consecutive_loss_cooldown_minutes=60,
+        )
+        assert rm.on_position_closed(Decimal("-100")) is False
+        assert rm.on_position_closed(Decimal("-100")) is True  # triggers
+        # Cooldown already active — must not report "newly triggered" again.
+        assert rm.on_position_closed(Decimal("-100")) is False
+
+    def test_returns_false_when_disabled(self) -> None:
+        rm = RiskManager(_make_settings(), _make_portfolio(), consecutive_loss_limit=0)
+        for _ in range(5):
+            assert rm.on_position_closed(Decimal("-10")) is False

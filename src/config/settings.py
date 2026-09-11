@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # ── Notifications (optional) ──────────────────────────────────────────────
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # "all" = every notification; "critical" = only risk alerts/errors (info suppressed)
+    telegram_notify_level: Literal["all", "critical"] = "all"
+    # "HH:MM-HH:MM" in UTC, wraparound supported (e.g. "22:00-07:00"). "" disables.
+    telegram_quiet_hours_utc: str = ""
 
     # ── Market Hours (optional, disabled by default for 24/7 crypto) ─────────
     market_hours_enabled: bool = False
