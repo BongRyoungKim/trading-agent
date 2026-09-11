@@ -14,6 +14,7 @@ def isolate_files(tmp_path, monkeypatch):
     monkeypatch.setattr(lp, "PARAMS_FILE", tmp_path / ".strategy_params.json")
     monkeypatch.setattr(lp, "AUDIT_LOG", tmp_path / "reports" / "param_change_log.jsonl")
     monkeypatch.setattr(lp, "RESTART_FLAG", tmp_path / ".restart_requested")
+    monkeypatch.setattr(lp, "PENDING_FILE", tmp_path / "reports" / "pending_param_change.json")
     return tmp_path
 
 
@@ -132,6 +133,60 @@ class TestAuditLog:
         lp.save(data)
         lp.propose_and_apply("mr_rsi_oversold_fast", lo * 0.1, trigger="t", reason="r")
         assert not lp.AUDIT_LOG.exists()
+
+
+class TestProposePending:
+    def test_pending_does_not_touch_live_params(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        assert lp.get_current("mr_vol_mult") == lp.DEFAULTS["strategy_params"]["mr_vol_mult"]
+
+    def test_no_pending_file_initially(self):
+        assert lp.has_pending_change() is False
+
+    def test_changed_proposal_creates_pending_file(self):
+        result = lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        assert result["changed"] is True
+        assert lp.has_pending_change() is True
+
+    def test_pending_uses_same_step_cap_and_clamp_as_apply(self):
+        # +100% request -> step-capped to +20%, same math as propose_and_apply.
+        result = lp.propose_pending("mr_vol_mult", 4.0, trigger="t", reason="r")
+        assert result["new"] == pytest.approx(2.4)
+
+    def test_unknown_param_raises(self):
+        with pytest.raises(ValueError):
+            lp.propose_pending("not_a_real_param", 1.0, trigger="t", reason="r")
+
+    def test_no_op_when_already_at_bound_does_not_create_pending_file(self):
+        lo, _ = lp.PARAM_BOUNDS["mr_rsi_oversold_fast"]
+        data = lp.load()
+        data["strategy_params"]["mr_rsi_oversold_fast"] = lo
+        lp.save(data)
+        result = lp.propose_pending("mr_rsi_oversold_fast", lo * 0.1, trigger="t", reason="r")
+        assert result["changed"] is False
+        assert lp.has_pending_change() is False
+
+    def test_pending_file_records_trigger_and_reason(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="wr_alert", reason="WR low")
+        pending = json.loads(lp.PENDING_FILE.read_text(encoding="utf-8"))
+        assert pending["strategy_params"]["mr_vol_mult"] == pytest.approx(2.2)
+        assert pending["_meta"]["mr_vol_mult"]["trigger"] == "wr_alert"
+
+    def test_multiple_proposals_accumulate_in_one_pending_file(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t1", reason="r1")
+        lp.propose_pending("sl_floor_pct", 3.5, trigger="t2", reason="r2")
+        pending = json.loads(lp.PENDING_FILE.read_text(encoding="utf-8"))
+        assert pending["strategy_params"]["mr_vol_mult"] == pytest.approx(2.2)
+        assert pending["risk"]["sl_floor_pct"] == pytest.approx(3.5)
+
+    def test_clear_pending_removes_file(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        lp.clear_pending()
+        assert lp.has_pending_change() is False
+
+    def test_clear_pending_when_absent_is_safe(self):
+        lp.clear_pending()  # should not raise
+        assert lp.has_pending_change() is False
 
 
 class TestRestartFlag:

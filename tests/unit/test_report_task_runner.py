@@ -65,6 +65,7 @@ def runner_env(tmp_path, monkeypatch):
     monkeypatch.setattr(lp, 'PARAMS_FILE', tmp_path / ".strategy_params.json")
     monkeypatch.setattr(lp, 'AUDIT_LOG', tmp_path / "param_change_log.jsonl")
     monkeypatch.setattr(lp, 'RESTART_FLAG', tmp_path / ".restart_requested")
+    monkeypatch.setattr(lp, 'PENDING_FILE', tmp_path / "pending_param_change.json")
     (tmp_path / "rec").mkdir()
     return tmp_path
 
@@ -269,8 +270,16 @@ class TestScheduledTaskRunnerRun:
 
 # ── Auto-apply (live_params integration) ────────────────────────────────────
 
-class TestAutoApply:
-    def test_wr_alert_applies_params_and_requests_restart(self, runner_env):
+class TestAutoPropose:
+    """
+    2026-09 이전엔 이 세 경보가 라이브 파라미터를 즉시 적용했다. 이제는
+    performance_gate(src/backtest/performance_gate.py) 검증 없이 실거래에
+    영향을 주지 않도록, reports/pending_param_change.json 에 제안만 쌓고
+    .strategy_params.json 은 그대로 둔다 — 사람이 `scripts/validate_params.py
+    --apply` 로 검증을 통과시켜야 실제 반영된다.
+    """
+
+    def test_wr_alert_proposes_without_touching_live_params(self, runner_env):
         import src.config.live_params as lp
         before = lp.load()["strategy_params"]
 
@@ -280,24 +289,39 @@ class TestAutoApply:
         runner.run(stats)
 
         after = lp.load()["strategy_params"]
-        assert after["mr_rsi_oversold_fast"] < before["mr_rsi_oversold_fast"]
-        assert after["mr_rsi_oversold_slow"] < before["mr_rsi_oversold_slow"]
-        assert after["mr_vol_mult"] > before["mr_vol_mult"]
-        assert lp.restart_requested()
+        assert after == before  # unchanged — nothing was applied live
+        assert not lp.restart_requested()
 
-    def test_wr_alert_step_capped_to_20_percent(self, runner_env):
+    def test_wr_alert_creates_pending_change(self, runner_env):
+        import src.config.live_params as lp
+        before = lp.load()["strategy_params"]
+
+        runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
+        stats = _mr_stats(total=15, wins=4, pnl=50.0, sig=8, sl=5, tp=2)
+        stats["wr_pct"] = 26.7
+        runner.run(stats)
+
+        assert lp.has_pending_change()
+        pending = json.loads(lp.PENDING_FILE.read_text(encoding="utf-8"))
+        assert pending["strategy_params"]["mr_rsi_oversold_fast"] < before["mr_rsi_oversold_fast"]
+        assert pending["strategy_params"]["mr_rsi_oversold_slow"] < before["mr_rsi_oversold_slow"]
+        assert pending["strategy_params"]["mr_vol_mult"] > before["mr_vol_mult"]
+
+    def test_wr_alert_pending_step_capped_to_20_percent(self, runner_env):
         import src.config.live_params as lp
         runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
         stats = _mr_stats(total=15, wins=4, pnl=50.0, sig=8, sl=5, tp=2)
         stats["wr_pct"] = 26.7
         runner.run(stats)
 
-        after = lp.load()["strategy_params"]
+        pending = json.loads(lp.PENDING_FILE.read_text(encoding="utf-8"))
         # default mr_vol_mult 2.0 * 1.2 = 2.4 (within bound, not clamped)
-        assert after["mr_vol_mult"] == pytest.approx(2.4, abs=0.01)
+        assert pending["strategy_params"]["mr_vol_mult"] == pytest.approx(2.4, abs=0.01)
 
-    def test_wr_alert_never_crosses_rsi_bounds(self, runner_env):
-        """Repeated firings must plateau at PARAM_BOUNDS, never exceed them."""
+    def test_wr_alert_pending_never_crosses_rsi_bounds(self, runner_env):
+        """Repeated firings must plateau the *pending* proposal at
+        PARAM_BOUNDS, never exceed them — live params stay untouched
+        throughout since nothing here is ever applied."""
         import src.config.live_params as lp
         runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
         stats = _mr_stats(total=15, wins=4, pnl=50.0, sig=8, sl=5, tp=2)
@@ -307,16 +331,15 @@ class TestAutoApply:
             stats_i["total"] = 15 + i * 5  # advance the 5-trade dedup bucket
             runner.run(stats_i)
 
-        after = lp.load()["strategy_params"]
+        pending = json.loads(lp.PENDING_FILE.read_text(encoding="utf-8"))["strategy_params"]
         fast_lo, fast_hi = lp.PARAM_BOUNDS["mr_rsi_oversold_fast"]
         slow_lo, slow_hi = lp.PARAM_BOUNDS["mr_rsi_oversold_slow"]
         vol_lo, vol_hi = lp.PARAM_BOUNDS["mr_vol_mult"]
-        assert fast_lo <= after["mr_rsi_oversold_fast"] <= fast_hi
-        assert slow_lo <= after["mr_rsi_oversold_slow"] <= slow_hi
-        assert vol_lo <= after["mr_vol_mult"] <= vol_hi
-        assert after["mr_rsi_oversold_fast"] < after["mr_rsi_oversold_slow"]
+        assert fast_lo <= pending["mr_rsi_oversold_fast"] <= fast_hi
+        assert slow_lo <= pending["mr_rsi_oversold_slow"] <= slow_hi
+        assert vol_lo <= pending["mr_vol_mult"] <= vol_hi
 
-    def test_pnl_alert_applies_tp_rr_multiplier(self, runner_env):
+    def test_pnl_alert_proposes_tp_rr_multiplier_without_applying(self, runner_env):
         import src.config.live_params as lp
         before = lp.load()["risk"]["tp_rr_multiplier"]
 
@@ -325,11 +348,12 @@ class TestAutoApply:
         stats["wr_pct"] = 41.7
         runner.run(stats)
 
-        after = lp.load()["risk"]["tp_rr_multiplier"]
-        assert after > before
-        assert lp.restart_requested()
+        assert lp.load()["risk"]["tp_rr_multiplier"] == before
+        assert not lp.restart_requested()
+        pending = json.loads(lp.PENDING_FILE.read_text(encoding="utf-8"))
+        assert pending["risk"]["tp_rr_multiplier"] > before
 
-    def test_sl_review_applies_sl_floor_pct(self, runner_env):
+    def test_sl_review_proposes_sl_floor_pct_without_applying(self, runner_env):
         import src.config.live_params as lp
         before = lp.load()["risk"]["sl_floor_pct"]
 
@@ -338,19 +362,19 @@ class TestAutoApply:
         stats["wr_pct"] = 40.0
         runner.run(stats)
 
-        after = lp.load()["risk"]["sl_floor_pct"]
-        assert after > before
-        assert lp.restart_requested()
+        assert lp.load()["risk"]["sl_floor_pct"] == before
+        assert not lp.restart_requested()
+        pending = json.loads(lp.PENDING_FILE.read_text(encoding="utf-8"))
+        assert pending["risk"]["sl_floor_pct"] > before
 
-    def test_audit_log_records_applied_changes(self, runner_env):
+    def test_no_audit_log_entry_until_actually_applied(self, runner_env):
+        """propose_pending() must never write to the live audit log — that
+        only happens when propose_and_apply() actually commits a change
+        (i.e. after scripts/validate_params.py --apply)."""
         import src.config.live_params as lp
         runner = ScheduledTaskRunner(journal_path=str(runner_env / "j.db"))
         stats = _mr_stats(total=10, wins=4, pnl=0.0, sl=7, sig=2, tp=1)
         stats["wr_pct"] = 40.0
         runner.run(stats)
 
-        assert lp.AUDIT_LOG.exists()
-        lines = lp.AUDIT_LOG.read_text(encoding="utf-8").strip().splitlines()
-        assert len(lines) >= 1
-        entry = json.loads(lines[0])
-        assert {"date", "trigger", "param", "old", "new", "reason"} <= entry.keys()
+        assert not lp.AUDIT_LOG.exists()

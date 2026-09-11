@@ -23,6 +23,11 @@ _ROOT = Path(__file__).parent.parent.parent
 PARAMS_FILE = _ROOT / ".strategy_params.json"
 AUDIT_LOG = _ROOT / "reports" / "param_change_log.jsonl"
 RESTART_FLAG = _ROOT / ".restart_requested"
+# 자동튜너가 제안한 변경 후보 — src/backtest/performance_gate.py 검증을 통과
+# (scripts/validate_params.py --apply)하기 전까지는 여기 머무를 뿐 .strategy_
+# params.json 에는 절대 반영되지 않는다. propose_and_apply()와 달리 이쪽은
+# 라이브에 아무 영향을 주지 않는 순수 제안 단계.
+PENDING_FILE = _ROOT / "reports" / "pending_param_change.json"
 
 # 파라미터 1회 변동폭 상한: 이전 값의 ±20%
 MAX_STEP_FRACTION = 0.20
@@ -159,6 +164,69 @@ def propose_and_apply(
         _append_audit(trigger=trigger, param=param, old=old, new=clamped, reason=reason)
 
     return {"param": param, "old": old, "new": clamped, "changed": changed}
+
+
+def _load_pending() -> dict[str, Any]:
+    if PENDING_FILE.exists():
+        try:
+            return json.loads(PENDING_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_pending(data: dict[str, Any]) -> None:
+    PENDING_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PENDING_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def propose_pending(
+    param: str, target_value: float, trigger: str, reason: str
+) -> dict[str, Any]:
+    """
+    Same step-cap + clamp math as propose_and_apply(), but stages the
+    result into PENDING_FILE instead of writing it to PARAMS_FILE.
+
+    Nothing here touches live trading behaviour — scripts/validate_params.py
+    must confirm the pending change clears the performance gate
+    (src/backtest/performance_gate.py) before anyone calls
+    propose_and_apply() to actually commit it.
+
+    Returns the same shape as propose_and_apply(): {"param", "old", "new",
+    "changed"} — changed=False means the target was already at/inside the
+    safety bounds relative to the current live value, so nothing was staged.
+    """
+    if param not in PARAM_BOUNDS:
+        raise ValueError(f"Unknown tunable parameter: {param}")
+
+    data = load()
+    section = _section_for(param)
+    old = float(data[section].get(param, DEFAULTS[section][param]))
+
+    stepped = _cap_step(old, target_value)
+    clamped = _clamp(param, stepped)
+    changed = not math.isclose(clamped, old, rel_tol=1e-6, abs_tol=1e-6)
+
+    if changed:
+        pending = _load_pending()
+        pending.setdefault(section, {})[param] = clamped
+        meta = pending.setdefault("_meta", {})
+        meta[param] = {
+            "trigger": trigger,
+            "reason": reason,
+            "proposed_at": datetime.now(KST).isoformat(timespec="seconds"),
+        }
+        _save_pending(pending)
+
+    return {"param": param, "old": old, "new": clamped, "changed": changed}
+
+
+def has_pending_change() -> bool:
+    return PENDING_FILE.exists()
+
+
+def clear_pending() -> None:
+    PENDING_FILE.unlink(missing_ok=True)
 
 
 def enforce_rsi_gap(min_gap: float = _RSI_MIN_GAP) -> dict[str, Any] | None:
