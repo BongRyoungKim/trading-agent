@@ -530,19 +530,28 @@ class TestRenderDashboard:
     # ── 차트 회귀 테스트 (실거래 규모: 30일치 일별 손익 / 8개 심볼) ─────────
     # 더미 2~3개 막대로만 검증해서 실거래 규모에서 라벨이 겹치는 문제를
     # 놓쳤던 사고의 재발 방지 — 반드시 실제 규모(한 달 전체 일수, 8개 심볼)로
-    # 데이터를 만들어 검증한다.
+    # 데이터를 만들어 검증한다. 업비트 데이터랩 참고 이후: "겹치면 전부 생략" 대신
+    # "겹치는 라벨만 개별적으로 생략"하는 그리디 배치로 바뀌었으므로, 라벨이 아예
+    # 없는지가 아니라 "겹치지 않는지 + 최대한 많이 보이는지"를 검증한다.
 
     # 막대 위 값 레이블에만 쓰이는 스타일 조합(축 눈금/총합/날짜·심볼 라벨과는 font-size
-    # + text-anchor + font-weight 조합이 겹치지 않는다) — 이 시그니처의 존재 여부로
-    # "막대별 라벨이 생략됐는지"를 축 라벨과 혼동 없이 판별한다.
-    _EQUITY_BAR_LABEL_STYLE = 'font-size="12" text-anchor="middle" font-weight="600"'
-    _SYMBOL_BAR_LABEL_STYLE = 'font-size="12" text-anchor="middle" font-weight="700"'
+    # + text-anchor + font-weight 조합이 겹치지 않는다) — 이 시그니처로 라벨 x좌표만
+    # 뽑아서 겹침 여부를 기하학적으로 확인한다.
+    _EQUITY_BAR_LABEL_RE = (
+        r'<text x="([\d.]+)" y="[\d.]+" fill="var\(--chart-(?:buy|sell)\)" '
+        r'font-size="10" text-anchor="middle" font-weight="600"'
+    )
+    _SYMBOL_BAR_LABEL_RE = (
+        r'<text x="([\d.]+)" y="[\d.]+" fill="var\(--chart-(?:buy|sell)\)" '
+        r'font-size="10" text-anchor="middle" font-weight="700"'
+    )
 
-    def test_html_equity_chart_full_month_suppresses_overlapping_bar_labels(self) -> None:
-        """실거래 규모(이번 달 전체 일수)로 막대가 촘촘해지면, 막대 중심 간 거리가
-        라벨 폭보다 좁아지므로 막대별 값 라벨은 생략되고 우측 상단 합계만 남아야
-        한다(더미 2~3개 막대로만 검증해 겹침을 놓쳤던 문제의 회귀 테스트)."""
+    def test_html_equity_chart_full_month_labels_dont_overlap_but_mostly_show(self) -> None:
+        """실거래 규모(이번 달 전체 일수)로 막대가 촘촘해져도, 그리디 배치 덕분에
+        라벨끼리 겹치지 않으면서(최소 간격 보장) 절반 이상은 실제로 표시돼야
+        한다 — 이전엔 조금이라도 겹칠 것 같으면 전부 생략해 버렸다."""
         import calendar
+        import re
         from datetime import date
 
         today = date.today()
@@ -555,41 +564,48 @@ class TestRenderDashboard:
             for d in range(1, last_day + 1)
         ]
         svg = _render_equity_svg(equity)
-        assert self._EQUITY_BAR_LABEL_STYLE not in svg
-        # 우측 상단 합계(월 누적)는 계속 보여야 한다
-        assert "text-anchor=\"end\" font-weight=\"800\"" in svg
+        xs = [float(m) for m in re.findall(self._EQUITY_BAR_LABEL_RE, svg)]
+        assert len(xs) >= last_day // 3, "라벨이 너무 적게 표시됨(과도한 생략)"
+        for a, b in zip(xs, xs[1:]):
+            assert b - a >= 10, "라벨끼리 겹치거나 너무 붙어 보임"
+        # 우측 상단 합계(월 누적)는 항상 정확한 자릿수로 보여야 한다
+        assert 'text-anchor="end" font-weight="800"' in svg
 
-    def test_html_equity_chart_always_spans_full_month(self) -> None:
-        """equity 차트는 거래가 하루치만 있어도 이번 달 전체 일수(28~31개) 막대를
-        그린다 — 즉 '막대 수가 적은 경우'가 구조적으로 존재하지 않으므로, 라벨
-        생략 로직이 항상 이 규모를 전제로 동작하는지(과도하게 숨기지 않는지)
-        아주 짧은 라벨(한 자릿수 원)로 확인한다."""
+    def test_html_equity_chart_axis_and_total_keep_full_precision(self) -> None:
+        """축 눈금·합계처럼 개수가 적은 곳은 만/억 축약 없이 정확한 전체 자릿수를
+        유지해야 한다(축약은 막대 위 값 라벨에만 적용)."""
         from datetime import date
 
         today = date.today()
-        equity = [{"time": f"{today.isoformat()}T00:00:00", "pnl": 5.0}]
+        equity = [{"time": f"{today.isoformat()}T00:00:00", "pnl": 123456.0}]
         svg = _render_equity_svg(equity)
-        assert "+₩5" in svg  # 축 눈금/합계 어딘가엔 반드시 나타남
+        assert "123,456" in svg  # 축/합계 어딘가엔 콤마 표기 전체 자릿수가 나타남
 
-    def test_html_symbol_pnl_chart_eight_symbols_suppresses_overlapping_labels(self) -> None:
-        """실거래 규모(8개 심볼)로 막대가 촘촘해지면 값 라벨 겹침을 피하기 위해
-        막대별 라벨을 생략해야 한다(더미 2개 심볼로만 검증해 놓쳤던 문제의 회귀 테스트)."""
+    def test_html_symbol_pnl_chart_eight_symbols_labels_dont_overlap(self) -> None:
+        """실거래 규모(8개 심볼)로도 그리디 배치 덕분에 라벨끼리 겹치지 않아야
+        한다(더미 2개 심볼로만 검증해 겹침을 놓쳤던 문제의 회귀 테스트)."""
+        import re
+
         trades = [
             self._trade(symbol=f"SYM{i}/KRW", pnl=(4227.0 if i % 2 == 0 else -5262.0))
             for i in range(8)
         ]
         svg = _render_symbol_pnl_svg(trades)
-        assert self._SYMBOL_BAR_LABEL_STYLE not in svg
-        # 심볼 티커(x축) 라벨은 값 라벨 생략과 무관하게 계속 보여야 한다
-        assert "SYM0" in svg
+        xs = [float(m) for m in re.findall(self._SYMBOL_BAR_LABEL_RE, svg)]
+        for a, b in zip(xs, xs[1:]):
+            assert b - a >= 10, "라벨끼리 겹치거나 너무 붙어 보임"
+        # 심볼 티커(x축) 라벨은 값 라벨 개수와 무관하게 8개 전부 보여야 한다
+        assert "SYM0" in svg and "SYM7" in svg
 
-    def test_html_symbol_pnl_chart_few_symbols_still_shows_bar_labels(self) -> None:
-        """심볼 수가 적으면(소규모) 기존처럼 막대별 값 라벨이 정상적으로 보여야
-        한다 — 겹침 방지 로직이 과도하게 라벨을 숨기지 않는지 확인."""
+    def test_html_symbol_pnl_chart_few_symbols_shows_bar_label(self) -> None:
+        """심볼 수가 적으면(소규모) 막대별 값 라벨이 정상적으로 보여야 한다 —
+        큰 금액은 만/억 단위로 축약 표기된다(예: 100,000원 → 10만원)."""
+        import re
+
         trades = [self._trade(symbol="BTC/KRW", pnl=100_000.0)]
         svg = _render_symbol_pnl_svg(trades)
-        assert self._SYMBOL_BAR_LABEL_STYLE in svg
-        assert "+₩100,000" in svg
+        assert re.search(self._SYMBOL_BAR_LABEL_RE, svg)
+        assert "+₩10만" in svg
 
     def test_html_chart_bars_use_dedicated_vivid_chart_tokens(self) -> None:
         """차트 막대는 절제된 구조색(--signal-buy/--signal-sell)이 아니라 어두운
@@ -602,11 +618,18 @@ class TestRenderDashboard:
         assert 'fill="var(--chart-buy)"' in html
 
     def test_html_chart_bar_width_has_min_and_max_clamp(self) -> None:
-        """막대 폭 계산식(barW)이 슬롯 폭의 고정 비율(약 62%)에 상한/하한 클램프를
-        두는지 확인한다 — 이전엔 상한이 없어 막대 수가 적을 때 과도하게 두꺼워졌다."""
+        """막대 폭 계산식(barW)이 슬롯 폭의 고정 비율(약 55%)에 상한/하한 클램프를
+        두는지 확인한다 — 라벨이 더 많이 뜨도록 이전(62%)보다 간격을 넓혔다."""
         html = render_dashboard(self._status(), [], {})
-        assert "slot * 0.62" in html  # renderEquity (JS)
-        assert "symSlot * 0.62" in html  # renderSymbolPnl (JS)
+        assert "slot * 0.55" in html  # renderEquity (JS)
+        assert "symSlot * 0.55" in html  # renderSymbolPnl (JS)
+
+    def test_html_chart_grid_uses_faint_translucent_tokens(self) -> None:
+        """그리드라인이 업비트 데이터랩처럼 '거의 안 보일 정도'로 옅어야 한다 —
+        불투명 회색 hex 대신 저알파 rgba 토큰을 쓴다."""
+        html = render_dashboard(self._status(), [], {})
+        assert "--chart-grid:rgba(" in html
+        assert "--chart-grid-soft:rgba(" in html
 
 
 # ── FastAPI routes ─────────────────────────────────────────────────────────────
