@@ -785,8 +785,19 @@ class TradingEngine:
             tp_rr_multiplier=self._tp_rr_multiplier,
         )
 
+        # Size off total equity (cash + cost-basis of currently open
+        # positions), not just free cash — otherwise each successive
+        # position in the same batch is 25% of an ever-shrinking cash pool
+        # (25%, ~18.75%, ~14%, ...) instead of four equal-sized slots.
+        invested_notional = sum(
+            (pos.amount * pos.entry_price for pos in (
+                self._portfolio.get_position(sym) for sym in self._portfolio.open_symbols()
+            ) if pos is not None),
+            start=Decimal("0"),
+        )
+        total_equity = self._portfolio.cash + invested_notional
         amount = percent_of_equity(
-            capital=self._portfolio.cash,
+            capital=total_equity,
             pct=self._position_size_pct,
             entry_price=price,
         )

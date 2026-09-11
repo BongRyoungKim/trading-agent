@@ -262,6 +262,33 @@ class TestFullTradingLoop:
         notional2 = pos2.amount * pos2.entry_price
         assert notional2 >= initial_cash * Decimal("0.10")
 
+    def test_position_size_pct_sizes_off_total_equity_not_shrinking_cash(
+        self, settings, exchange, strategy, telegram
+    ):
+        """Each slot should be ~pct% of TOTAL equity (cash + already-invested
+        cost basis), so opening several positions back-to-back yields equally
+        sized slots — not 25%, then 25% of the smaller remaining cash
+        (~18.75% of the original total), then even smaller again."""
+        initial_cash = Decimal("2000000")
+        port = PortfolioTracker(initial_cash=initial_cash)
+        state = PortfolioState(capital=initial_cash, peak_capital=initial_cash)
+        rm = RiskManager(settings, state)
+        eng = TradingEngine(settings, exchange, strategy, rm, port, telegram)
+        eng.position_size_pct = 0.25
+
+        exchange.get_ohlcv_dataframe.return_value = _make_buy_df()
+        exchange.get_ticker.return_value = _make_ticker(60000.0)
+        eng.tick("BTC/USDT")
+        notional1 = port.get_position("BTC/USDT").amount * port.get_position("BTC/USDT").entry_price
+
+        eng.tick("ETH/USDT")
+        notional2 = port.get_position("ETH/USDT").amount * port.get_position("ETH/USDT").entry_price
+
+        # Both slots ~25% of the original 2,000,000 total equity (500,000),
+        # not 25% then ~18.75% of a shrinking cash pool.
+        assert float(notional1) == pytest.approx(500_000, rel=0.02)
+        assert float(notional2) == pytest.approx(500_000, rel=0.02)
+
     def test_tick_error_does_not_crash_engine(self, engine, exchange):
         """Exchange error inside tick is caught; engine remains operational."""
         exchange.get_ohlcv_dataframe.side_effect = RuntimeError("network error")

@@ -122,6 +122,7 @@ def portfolio():
     p.cash = Decimal("10000")
     p.has_position.return_value = False
     p.get_position.return_value = _make_position_mock()
+    p.open_symbols.return_value = []  # no open positions -> total_equity == cash by default
     p.snapshot.return_value = MagicMock()
     p.pnl_report.return_value = {
         "cash": "10000",
