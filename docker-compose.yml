@@ -2,11 +2,18 @@ services:
   trading-agent:
     build: .
     env_file: .env
+    entrypoint: ["/bin/bash", "/app/entrypoint.sh"]
     ports:
       - "8080:8080"
+      - "8081:8081"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+      - ./reports:/app/reports
+      - ./scripts:/app/scripts:ro
+      - ./entrypoint.sh:/app/entrypoint.sh:ro
+      - ./.trading_mode:/app/.trading_mode
+      - ./.strategy_params.json:/app/.strategy_params.json
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -15,7 +22,6 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
-    command: ["--mode", "paper", "--symbols", "BTC/USDT", "ETH/USDT", "--interval", "60"]
 
   # 브레이크아웃 조기진입 페이퍼 스캐너 — trading-agent와 완전히 독립된 프로세스.
   # 라이브 자본에 손대지 않고(PAPER 전용), 이 서비스만 따로 재시작/재배포해도

@@ -57,3 +57,13 @@ Thumbs.db
 
 # Generated reports (runtime output)
 reports/
+
+# Live-mutable runtime config — ScheduledTaskRunner/dashboard write these
+# directly on the server; tracking them in git only produces permanent
+# drift (git's copy is always stale the moment the auto-tuner or a mode
+# toggle runs). scripts/render_launch_args.py's DEFAULT_STRATEGY_PARAMS/
+# DEFAULT_RISK are the versioned baseline; these files are the live
+# server-local override, same category as .env.
+.strategy_params.json
+.trading_mode
+.strategy_params.json.bak-*
