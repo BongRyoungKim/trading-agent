@@ -16,6 +16,8 @@ def _mock_settings(mode: str = "paper", exchange: str = "binance") -> MagicMock:
     s.binance_secret_key = "s"
     s.upbit_access_key = "k"
     s.upbit_secret_key = "s"
+    s.bybit_api_key = "k"
+    s.bybit_secret_key = "s"
     s.max_position_risk = 0.02
     s.max_open_positions = 5
     s.max_daily_loss = 0.05
@@ -38,6 +40,7 @@ def _run_main(argv: list[str], settings: MagicMock | None = None):
         p_settings = stack.enter_context(patch("src.main.get_settings", return_value=settings))
         p_logger = stack.enter_context(patch("src.main.setup_logger"))
         p_binance = stack.enter_context(patch("src.exchange.binance.BinanceClient"))
+        p_bybit = stack.enter_context(patch("src.exchange.bybit.BybitClient"))
         p_upbit = stack.enter_context(patch("src.exchange.upbit.UpbitClient"))
         # PortfolioTracker.from_store is called now
         p_tracker_cls = stack.enter_context(patch("src.portfolio.tracker.PortfolioTracker"))
@@ -63,6 +66,7 @@ def _run_main(argv: list[str], settings: MagicMock | None = None):
     patches = {
         "get_settings": p_settings,
         "BinanceClient": p_binance,
+        "BybitClient": p_bybit,
         "UpbitClient": p_upbit,
         "get_strategy": p_get_strategy,
         "TradingEngine": p_engine_cls,
@@ -134,16 +138,13 @@ class TestMain:
         _, patches = _run_main([], settings=_mock_settings(exchange="binance"))
         patches["BinanceClient"].assert_called_once()
 
-    def test_bybit_exchange_raises_configuration_error(self):
+    def test_bybit_exchange_builds_bybit_client(self):
         """
-        exchange=bybit has no BybitClient implementation. Must fail loudly at
-        startup instead of silently falling back to BinanceClient (regression
-        test for a real bug where bybit configs silently traded on Binance).
+        exchange=bybit must build a BybitClient (regression test for a real
+        bug where bybit configs silently traded on Binance instead).
         """
-        from src.utils.exceptions import ConfigurationError
-
-        with pytest.raises(ConfigurationError):
-            _run_main([], settings=_mock_settings(exchange="bybit"))
+        _, patches = _run_main([], settings=_mock_settings(exchange="bybit"))
+        patches["BybitClient"].assert_called_once()
 
     def test_engine_created_with_correct_settings(self):
         settings = _mock_settings()

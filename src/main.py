@@ -9,7 +9,6 @@ import json
 from decimal import Decimal
 
 from src.config.settings import get_settings
-from src.utils.exceptions import ConfigurationError
 from src.utils.logger import logger, setup_logger
 from src.utils import prevent_sleep
 
@@ -339,6 +338,7 @@ def main() -> None:
 
     # ── Build components ──────────────────────────────────────────────────────
     from src.exchange.binance import BinanceClient
+    from src.exchange.bybit import BybitClient
     from src.exchange.upbit import UpbitClient
     from src.portfolio.journal_store import SQLiteJournalStore
     from src.portfolio.position_store import SQLitePositionStore
@@ -361,13 +361,10 @@ def main() -> None:
             testnet=effective_mode != "live",
         )
     else:
-        # Fail fast — settings.exchange is validated against a Literal that
-        # currently allows "bybit", but no BybitClient exists yet. Silently
-        # falling back to BinanceClient here previously meant a bybit config
-        # would trade on the wrong exchange with the wrong credentials.
-        raise ConfigurationError(
-            f"Exchange '{settings.exchange}' has no client implementation",
-            details={"exchange": settings.exchange, "supported": "binance, upbit"},
+        exchange = BybitClient(
+            api_key=settings.bybit_api_key,
+            secret_key=settings.bybit_secret_key,
+            testnet=effective_mode != "live",
         )
 
     if effective_mode == "live":

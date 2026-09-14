@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.exchange.binance import BinanceClient
+from src.exchange.bybit import BybitClient
 from src.exchange.models import OrderStatus, OrderType
 from src.exchange.upbit import UpbitClient
 from src.utils.exceptions import (
@@ -426,3 +427,246 @@ class TestGetLiquidSymbols:
         )
         result = upbit_client.get_liquid_symbols(min_quote_volume_krw=10_000_000_000)
         assert result == ["BTC/KRW", "ETH/KRW"]
+
+
+# ── Bybit Client Tests (spot only — margin/derivatives out of scope) ──────────
+
+@pytest.fixture()
+def mock_ccxt_bybit():
+    """Return a MagicMock that mimics ccxt.bybit."""
+    mock_exchange = MagicMock()
+    mock_exchange.fetch_balance.return_value = {
+        "BTC": {"free": 1.0, "used": 0.0, "total": 1.0},
+        "USDT": {"free": 10000.0, "used": 0.0, "total": 10000.0},
+        "info": {},
+    }
+    mock_exchange.create_order.return_value = _make_raw_order()
+    mock_exchange.cancel_order.return_value = {"id": "123", "status": "canceled"}
+    mock_exchange.fetch_ticker.return_value = _make_raw_ticker()
+    mock_exchange.fetch_ohlcv.return_value = _make_raw_ohlcv()
+
+    with patch("src.exchange.bybit._import_ccxt") as mock_import:
+        mock_ccxt = MagicMock()
+        mock_ccxt.bybit.return_value = mock_exchange
+        mock_ccxt.AuthenticationError = Exception
+        mock_ccxt.RateLimitExceeded = Exception
+        mock_ccxt.InsufficientFunds = Exception
+        mock_ccxt.OrderNotFound = Exception
+        mock_ccxt.NetworkError = Exception
+        mock_ccxt.ExchangeNotAvailable = Exception
+        mock_import.return_value = mock_ccxt
+        yield mock_exchange
+
+
+@pytest.fixture()
+def bybit_client(mock_ccxt_bybit: MagicMock) -> BybitClient:
+    return BybitClient(api_key="test_key", secret_key="test_secret")
+
+
+class TestBybitClientGetBalance:
+    def test_returns_non_zero_balances(self, bybit_client: BybitClient) -> None:
+        balances = bybit_client.get_balance()
+        assert "BTC" in balances
+        assert "USDT" in balances
+        assert balances["BTC"].total == Decimal("1.0")
+
+    def test_excludes_zero_balances(self, bybit_client: BybitClient) -> None:
+        balances = bybit_client.get_balance()
+        assert "info" not in balances
+
+
+class TestBybitClientPlaceOrder:
+    def test_place_limit_order(self, bybit_client: BybitClient) -> None:
+        order = bybit_client.place_order("BTC/USDT", "buy", 0.01, price=50000.0)
+        assert order.id == "123"
+        assert order.side == "buy"
+        assert order.order_type == OrderType.LIMIT
+        assert order.status == OrderStatus.OPEN
+
+    def test_place_market_order(self, bybit_client: BybitClient, mock_ccxt_bybit: MagicMock) -> None:
+        mock_ccxt_bybit.create_order.return_value = {
+            **_make_raw_order(),
+            "type": "market",
+            "price": 0.0,
+        }
+        order = bybit_client.place_order("BTC/USDT", "buy", 0.01)
+        mock_ccxt_bybit.create_order.assert_called_once()
+        call_kwargs = mock_ccxt_bybit.create_order.call_args
+        assert call_kwargs.kwargs.get("type") == "market" or call_kwargs[1].get("type") == "market"
+
+
+class TestBybitClientCancelOrder:
+    def test_cancel_existing_order(self, bybit_client: BybitClient) -> None:
+        result = bybit_client.cancel_order("123", "BTC/USDT")
+        assert result is True
+
+    def test_cancel_not_found_returns_false(self) -> None:
+        class FakeOrderNotFound(Exception):
+            pass
+
+        mock_exchange = MagicMock()
+        mock_exchange.cancel_order.side_effect = FakeOrderNotFound("not found")
+
+        with patch("src.exchange.bybit._import_ccxt") as mock_import, \
+             patch("src.exchange.binance._import_ccxt") as mock_import_binance:
+            mock_ccxt = MagicMock()
+            mock_ccxt.OrderNotFound = FakeOrderNotFound
+            mock_ccxt.AuthenticationError = type("AuthErr", (Exception,), {})
+            mock_ccxt.RateLimitExceeded = type("RateLimit", (Exception,), {})
+            mock_ccxt.InsufficientFunds = type("InsFunds", (Exception,), {})
+            mock_ccxt.NetworkError = type("NetErr", (Exception,), {})
+            mock_ccxt.ExchangeNotAvailable = type("ExchNA", (Exception,), {})
+            mock_ccxt.bybit.return_value = mock_exchange
+            mock_import.return_value = mock_ccxt
+            # _map_ccxt_exception lives in binance.py and is reused by bybit.py
+            mock_import_binance.return_value = mock_ccxt
+
+            client = BybitClient("k", "s")
+            result = client.cancel_order("999", "BTC/USDT")
+            assert result is False
+
+
+class TestBybitClientGetOHLCV:
+    def test_returns_ohlcv_bars(self, bybit_client: BybitClient) -> None:
+        bars = bybit_client.get_ohlcv("BTC/USDT", "1h", 1)
+        assert len(bars) == 1
+        assert bars[0].close == Decimal("50500.0")
+
+    def test_get_ohlcv_dataframe_columns(self, bybit_client: BybitClient) -> None:
+        df = bybit_client.get_ohlcv_dataframe("BTC/USDT", "1h", 1)
+        assert list(df.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+
+
+class TestBybitClientGetTicker:
+    def test_returns_ticker(self, bybit_client: BybitClient) -> None:
+        ticker = bybit_client.get_ticker("BTC/USDT")
+        assert ticker.symbol == "BTC/USDT"
+        assert ticker.last == Decimal("50000.0")
+
+
+class TestBybitExchangeId:
+    def test_bybit_exchange_id(self, bybit_client: BybitClient) -> None:
+        assert bybit_client.exchange_id == "bybit"
+
+
+class TestBybitClientExceptionMapping:
+    def _make_client_with_exception(self, exc_cls: type, raised_by: str):
+        mock_exchange = MagicMock()
+        getattr(mock_exchange, raised_by).side_effect = exc_cls("boom")
+
+        mock_ccxt = MagicMock()
+        mock_ccxt.AuthenticationError = type("AuthErr", (Exception,), {})
+        mock_ccxt.RateLimitExceeded = type("RateLimit", (Exception,), {})
+        mock_ccxt.InsufficientFunds = type("InsFunds", (Exception,), {})
+        mock_ccxt.OrderNotFound = type("OrderNF", (Exception,), {})
+        mock_ccxt.NetworkError = type("NetErr", (Exception,), {})
+        mock_ccxt.ExchangeNotAvailable = type("ExchNA", (Exception,), {})
+        mock_ccxt.bybit.return_value = mock_exchange
+        return mock_ccxt, mock_exchange
+
+    def test_authentication_error_mapped(self) -> None:
+        mock_ccxt, mock_exchange = self._make_client_with_exception(
+            type("AuthErr2", (Exception,), {}), "fetch_balance"
+        )
+        auth_err = type("AuthErr2Real", (Exception,), {})
+        mock_ccxt.AuthenticationError = auth_err
+        mock_exchange.fetch_balance.side_effect = auth_err("bad key")
+
+        with patch("src.exchange.bybit._import_ccxt", return_value=mock_ccxt), \
+             patch("src.exchange.binance._import_ccxt", return_value=mock_ccxt):
+            client = BybitClient("k", "s")
+            with pytest.raises(AuthenticationError):
+                client.get_balance()
+
+    def test_insufficient_funds_mapped(self) -> None:
+        insufficient = type("InsufficientFundsReal", (Exception,), {})
+        mock_ccxt = MagicMock()
+        mock_ccxt.AuthenticationError = type("AuthErr", (Exception,), {})
+        mock_ccxt.RateLimitExceeded = type("RateLimit", (Exception,), {})
+        mock_ccxt.InsufficientFunds = insufficient
+        mock_ccxt.OrderNotFound = type("OrderNF", (Exception,), {})
+        mock_ccxt.NetworkError = type("NetErr", (Exception,), {})
+        mock_ccxt.ExchangeNotAvailable = type("ExchNA", (Exception,), {})
+        mock_exchange = MagicMock()
+        mock_exchange.create_order.side_effect = insufficient("not enough")
+        mock_ccxt.bybit.return_value = mock_exchange
+
+        with patch("src.exchange.bybit._import_ccxt", return_value=mock_ccxt), \
+             patch("src.exchange.binance._import_ccxt", return_value=mock_ccxt):
+            client = BybitClient("k", "s")
+            with pytest.raises(InsufficientFundsError):
+                client.place_order("BTC/USDT", "buy", 0.01, price=50000.0)
+
+    def test_rate_limit_mapped(self) -> None:
+        rate_limit = type("RateLimitReal", (Exception,), {})
+        mock_ccxt = MagicMock()
+        mock_ccxt.AuthenticationError = type("AuthErr", (Exception,), {})
+        mock_ccxt.RateLimitExceeded = rate_limit
+        mock_ccxt.InsufficientFunds = type("InsFunds", (Exception,), {})
+        mock_ccxt.OrderNotFound = type("OrderNF", (Exception,), {})
+        mock_ccxt.NetworkError = type("NetErr", (Exception,), {})
+        mock_ccxt.ExchangeNotAvailable = type("ExchNA", (Exception,), {})
+        mock_exchange = MagicMock()
+        mock_exchange.fetch_ticker.side_effect = rate_limit("slow down")
+        mock_ccxt.bybit.return_value = mock_exchange
+
+        with patch("src.exchange.bybit._import_ccxt", return_value=mock_ccxt), \
+             patch("src.exchange.binance._import_ccxt", return_value=mock_ccxt):
+            client = BybitClient("k", "s")
+            with pytest.raises(RateLimitError):
+                client.get_ticker("BTC/USDT")
+
+
+class TestBybitClientTestnet:
+    def test_testnet_enables_sandbox_mode(self) -> None:
+        mock_exchange = MagicMock()
+        mock_ccxt = MagicMock()
+        mock_ccxt.bybit.return_value = mock_exchange
+        mock_ccxt.AuthenticationError = Exception
+        mock_ccxt.RateLimitExceeded = Exception
+        mock_ccxt.InsufficientFunds = Exception
+        mock_ccxt.OrderNotFound = Exception
+        mock_ccxt.NetworkError = Exception
+        mock_ccxt.ExchangeNotAvailable = Exception
+
+        with patch("src.exchange.bybit._import_ccxt", return_value=mock_ccxt):
+            BybitClient("k", "s", testnet=True)
+            mock_exchange.set_sandbox_mode.assert_called_once_with(True)
+
+    def test_no_testnet_does_not_enable_sandbox_mode(self) -> None:
+        mock_exchange = MagicMock()
+        mock_ccxt = MagicMock()
+        mock_ccxt.bybit.return_value = mock_exchange
+        mock_ccxt.AuthenticationError = Exception
+        mock_ccxt.RateLimitExceeded = Exception
+        mock_ccxt.InsufficientFunds = Exception
+        mock_ccxt.OrderNotFound = Exception
+        mock_ccxt.NetworkError = Exception
+        mock_ccxt.ExchangeNotAvailable = Exception
+
+        with patch("src.exchange.bybit._import_ccxt", return_value=mock_ccxt):
+            BybitClient("k", "s", testnet=False)
+            mock_exchange.set_sandbox_mode.assert_not_called()
+
+
+class TestBybitDefaultsToSpot:
+    def test_options_default_type_is_spot(self) -> None:
+        """
+        Bybit는 spot/linear(선물)/inverse를 defaultType 옵션으로 구분한다.
+        이번 범위는 현물(spot)만 — 파생상품 설정이 섞여 들어가지 않았는지 확인.
+        """
+        mock_exchange = MagicMock()
+        mock_ccxt = MagicMock()
+        mock_ccxt.bybit.return_value = mock_exchange
+        mock_ccxt.AuthenticationError = Exception
+        mock_ccxt.RateLimitExceeded = Exception
+        mock_ccxt.InsufficientFunds = Exception
+        mock_ccxt.OrderNotFound = Exception
+        mock_ccxt.NetworkError = Exception
+        mock_ccxt.ExchangeNotAvailable = Exception
+
+        with patch("src.exchange.bybit._import_ccxt", return_value=mock_ccxt):
+            BybitClient("k", "s")
+            call_args = mock_ccxt.bybit.call_args
+            config = call_args[0][0] if call_args[0] else call_args.kwargs
+            assert config["options"]["defaultType"] == "spot"
