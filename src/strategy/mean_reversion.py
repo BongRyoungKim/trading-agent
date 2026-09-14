@@ -221,7 +221,7 @@ class MeanReversionStrategy(BaseStrategy):
             )
 
         # ── BUY: 과매도 반등 ───────────────────────────────────────────────────
-        current_hour_utc = datetime.now(UTC).hour
+        current_hour_utc = timestamp.hour
         time_ok = current_hour_utc not in self._no_entry_hours_utc
 
         buy_condition = (
