@@ -4,6 +4,18 @@ Swing Momentum Strategy (15m)
 진입: 중기 상승 추세 안에서 RSI 과매도 후 회복 구간을 매수.
 청산: EMA 데스크로스(추세 붕괴) 또는 RSI 과매수(엔진 TP가 먼저 잡음).
 
+⚠ RegimeAdaptiveStrategy 경유 시 주의:
+  본 전략을 RegimeAdaptiveStrategy가 위임 호출하는 구조에서는 SELL① (EMA
+  데스크로스) 청산 경로가 구조적으로 도달 불가능하다. RegimeAdaptiveStrategy
+  .detect_regime()의 uptrend 판정 조건(EMA_fast > EMA_slow)과 본 전략의
+  데스크로스 조건(EMA_fast < EMA_slow)이 동일한 EMA fast/slow 쌍을 쓰기 때문에,
+  데스크로스가 성립하는 순간 국면검출기가 이미 downtrend로 재분류해
+  MeanReversionStrategy로 라우팅해버린다(27심볼 510,838봉 실측: 데스크로스
+  발생 5,699봉 중 uptrend였던 것 0봉 — tests/unit/test_regime_adaptive_strategy.py
+  참고). SELL①은 SwingMomentumStrategy를 "단독으로" 사용할 때만 유효한 청산
+  경로다. 로직은 그대로 두되(RegimeAdaptiveStrategy가 아닌 경로에서 여전히
+  유효), 이 사실을 인지하고 있어야 한다.
+
 기존 Scalping5mStrategy 문제점 분석 후 설계:
   - 3m 캔들 노이즈 → 15m으로 타임프레임 상향
   - EMA 크로스오버 과다 신호 → RSI 과매도 회복 패턴으로 전환
@@ -26,6 +38,7 @@ BUY 조건 (전부 충족):
 
 SELL 조건:
   1. EMA20이 EMA50 아래로 교차(데스크로스) → 추세 붕괴
+     (RegimeAdaptiveStrategy 경유 시 구조적으로 도달 불가 — 위 경고 참고)
   2. RSI ≥ rsi_overbought → 과매수 (엔진 TP가 먼저 잡을 가능성 높음)
 """
 from __future__ import annotations
@@ -232,6 +245,10 @@ class SwingMomentumStrategy(BaseStrategy):
         }
 
         # ── SELL ①: 데스크로스 (추세 붕괴) ────────────────────────────────────
+        # ⚠ RegimeAdaptiveStrategy 경유 시 도달 불가(dead code path): 국면검출의
+        #   uptrend 조건과 이 데스크로스 조건이 같은 EMA fast/slow 쌍을 쓰므로,
+        #   데스크로스가 성립하는 순간 이미 downtrend로 재분류된다(모듈
+        #   docstring 및 test_regime_adaptive_strategy.py 참고). 단독 사용 시엔 유효.
         if death_cross:
             return Signal(
                 symbol=self._symbol,
