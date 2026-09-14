@@ -55,6 +55,12 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "mr_rsi_exit": 55.0,
         "mr_rsi_exit_fast": 70.0,
         "mr_no_entry_hours_utc": [17, 18, 19, 20],
+        # mr_sma_period/mr_sma_floor 는 scripts/render_launch_args.py 의
+        # DEFAULT_STRATEGY_PARAMS 에만 있고 여기에는 빠져 있었다 —
+        # tests/unit/test_validate_params_script.py 의 배선 가드가 검출.
+        # 값은 render_launch_args 쪽과 동일하게 맞춘다(0=필터 비활성).
+        "mr_sma_period": 0,
+        "mr_sma_floor": 0.85,
         "sm_vol_mult": 1.5,
         "sm_adx_threshold": 28.0,
     },

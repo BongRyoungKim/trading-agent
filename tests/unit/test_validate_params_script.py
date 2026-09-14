@@ -9,10 +9,11 @@ launched via this script would have silently ignored it in the baseline.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import sys
 from pathlib import Path
 
-from src.config.live_params import PARAM_BOUNDS, RISK_KEYS
+from src.config.live_params import DEFAULTS, PARAM_BOUNDS, RISK_KEYS
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
 _SCRIPT_PATH = _SCRIPTS_DIR / "validate_params.py"
@@ -38,4 +39,57 @@ def test_strategy_keys_covers_every_tunable_strategy_param():
     assert not missing, (
         f"scripts/validate_params.py's _STRATEGY_KEYS is missing tunable "
         f"strategy params from PARAM_BOUNDS: {missing}"
+    )
+
+
+def _regime_adaptive_sub_strategy_params() -> set[str]:
+    """Every mr_*/sm_* kwarg RegimeAdaptiveStrategy forwards to a sub-strategy."""
+    from src.strategy.regime_adaptive import RegimeAdaptiveStrategy
+
+    return {
+        name
+        for name in inspect.signature(RegimeAdaptiveStrategy.__init__).parameters
+        if name.startswith(("mr_", "sm_"))
+    }
+
+
+def test_every_sub_strategy_param_is_wired_end_to_end():
+    """Generic wiring guard for the whole live parameter pipeline.
+
+    A sub-strategy parameter only reaches live trading if it is declared in
+    all three places below; miss one and the failure is *silent* (the value
+    is quietly dropped and the sub-strategy runs on its own default). This
+    already happened once with mr_rsi_exit_fast, and the same class of bug
+    was re-checked for sm_vol_mult/sm_adx_threshold during the
+    SwingMomentum diagnosis. Enumerating the constructor signature means new
+    parameters are covered automatically instead of by remembering to edit
+    a list.
+
+      render_launch_args.DEFAULT_STRATEGY_PARAMS
+          -> what entrypoint.sh actually passes to `python -m src.main`
+      live_params.DEFAULTS["strategy_params"]
+          -> what the dashboard / task runner reads back as current state
+      validate_params._STRATEGY_KEYS
+          -> what the backtest gate compares baseline against candidate on
+    """
+    module = _load_validate_params_module()
+    import render_launch_args
+
+    expected = _regime_adaptive_sub_strategy_params()
+    locations = {
+        "render_launch_args.DEFAULT_STRATEGY_PARAMS":
+            set(render_launch_args.DEFAULT_STRATEGY_PARAMS),
+        "live_params.DEFAULTS['strategy_params']":
+            set(DEFAULTS["strategy_params"]),
+        "validate_params._STRATEGY_KEYS":
+            set(module._STRATEGY_KEYS),
+    }
+    missing = {
+        where: sorted(expected - declared)
+        for where, declared in locations.items()
+        if expected - declared
+    }
+    assert not missing, (
+        "RegimeAdaptiveStrategy sub-strategy parameters are not wired "
+        f"end-to-end: {missing}"
     )
