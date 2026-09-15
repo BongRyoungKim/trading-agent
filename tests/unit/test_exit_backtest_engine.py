@@ -26,10 +26,13 @@ class _ScriptedStrategy(BaseStrategy):
     """Returns `actions[call_index]` each time generate_signal is called
     (clamped to the last action once exhausted). `atr` is constant."""
 
-    def __init__(self, actions: list[SignalAction], atr: float = 1.0) -> None:
+    def __init__(
+        self, actions: list[SignalAction], atr: float = 1.0, regime: str | None = None,
+    ) -> None:
         self._actions = actions
         self._call = 0
         self._atr = atr
+        self._regime = regime
 
     @property
     def name(self) -> str:
@@ -46,10 +49,13 @@ class _ScriptedStrategy(BaseStrategy):
         idx = min(self._call, len(self._actions) - 1)
         action = self._actions[idx]
         self._call += 1
+        metadata = {"price": float(row["close"]), "atr": self._atr}
+        if self._regime is not None:
+            metadata["regime"] = self._regime
         return Signal(
             symbol="TEST", action=action, strength=1.0, reason="scripted",
             timestamp=row["timestamp"],
-            metadata={"price": float(row["close"]), "atr": self._atr},
+            metadata=metadata,
         )
 
 
@@ -193,3 +199,26 @@ class TestSymbolLabel:
         strategy = _ScriptedStrategy([SignalAction.BUY] + [SignalAction.HOLD] * 10)
         trades = run_exit_backtest(df, strategy, _make_risk_manager(), _base_config(), symbol="BTC/KRW")
         assert trades[0].symbol == "BTC/KRW"
+
+
+class TestRegimeLabel:
+    """국면별 차등 포지션 사이징 리서치를 위해, 진입 시점 신호의 regime
+    metadata가 Trade에 그대로 보존돼야 한다 — 이전에는 계산만 하고 버렸다."""
+
+    def test_regime_propagated_from_entry_signal_to_trade(self) -> None:
+        rows = [_row(_base_time(i), 100, 100, 100, 100) for i in range(WINDOW)]
+        rows.append(_row(_base_time(WINDOW), 95, 95, 88, 90))
+        df = pd.DataFrame(rows)
+        strategy = _ScriptedStrategy(
+            [SignalAction.BUY] + [SignalAction.HOLD] * 10, regime="uptrend",
+        )
+        trades = run_exit_backtest(df, strategy, _make_risk_manager(), _base_config())
+        assert trades[0].regime == "uptrend"
+
+    def test_regime_defaults_to_none_when_signal_has_no_regime_metadata(self) -> None:
+        rows = [_row(_base_time(i), 100, 100, 100, 100) for i in range(WINDOW)]
+        rows.append(_row(_base_time(WINDOW), 95, 95, 88, 90))
+        df = pd.DataFrame(rows)
+        strategy = _ScriptedStrategy([SignalAction.BUY] + [SignalAction.HOLD] * 10)
+        trades = run_exit_backtest(df, strategy, _make_risk_manager(), _base_config())
+        assert trades[0].regime is None

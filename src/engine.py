@@ -99,6 +99,8 @@ class TradingEngine:
         # returns, unaffected by sizing) for materially lower portfolio
         # variance, which is worth it while the strategy's edge is thin.
         self._position_size_pct: float = 0.25
+        self._position_size_pct_uptrend: float | None = None
+        self._position_size_pct_downtrend: float | None = None
         self._start_time: float | None = None
         self._data_validator = OHLCVValidator()
         self._scheduler = BackgroundScheduler(daemon=True)
@@ -237,6 +239,22 @@ class TradingEngine:
     @position_size_pct.setter
     def position_size_pct(self, value: float) -> None:
         self._position_size_pct = float(value)
+
+    @property
+    def position_size_pct_uptrend(self) -> float | None:
+        return self._position_size_pct_uptrend
+
+    @position_size_pct_uptrend.setter
+    def position_size_pct_uptrend(self, value: float | None) -> None:
+        self._position_size_pct_uptrend = float(value) if value is not None else None
+
+    @property
+    def position_size_pct_downtrend(self) -> float | None:
+        return self._position_size_pct_downtrend
+
+    @position_size_pct_downtrend.setter
+    def position_size_pct_downtrend(self, value: float | None) -> None:
+        self._position_size_pct_downtrend = float(value) if value is not None else None
 
     @property
     def symbol_blacklist(self) -> frozenset[str]:
@@ -810,9 +828,20 @@ class TradingEngine:
             start=Decimal("0"),
         )
         total_equity = self._portfolio.cash + invested_notional
+        # 국면별 차등 사이징: UPTREND(SwingMomentumStrategy)는 진입조건이
+        # 거의 항상 안 맞아 구조적으로 거래가 드문 국면으로 확인됨 — 오버라이드가
+        # 설정돼 있으면 그 국면에서만 별도 비율을 쓴다. 미설정(None, 기본값)이면
+        # 기존과 완전히 동일하게 동작한다.
+        regime = signal_.metadata.get("regime") if signal_ and signal_.metadata else None
+        regime_overrides = {
+            "uptrend": self._position_size_pct_uptrend,
+            "downtrend": self._position_size_pct_downtrend,
+        }
+        override = regime_overrides.get(regime)
+        effective_pct = override if override is not None else self._position_size_pct
         amount = percent_of_equity(
             capital=total_equity,
-            pct=self._position_size_pct,
+            pct=effective_pct,
             entry_price=price,
         )
 

@@ -22,6 +22,7 @@ class Trade:
     exit_time: datetime
     commission: Decimal                # total commission paid (entry + exit)
     exit_reason: str | None = None     # "stop_loss" | "take_profit" | "time_stop" | "signal" | None
+    regime: str | None = None          # "uptrend" | "ranging" | "downtrend" | None (entry-time regime)
 
     @property
     def pnl(self) -> Decimal:

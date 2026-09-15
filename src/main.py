@@ -233,6 +233,22 @@ def _build_parser() -> argparse.ArgumentParser:
              "i.e. up to 4 concurrent positions). Pairs with MAX_OPEN_POSITIONS.",
     )
     p.add_argument(
+        "--position-size-pct-uptrend",
+        type=float,
+        default=None,
+        dest="position_size_pct_uptrend",
+        help="Override --position-size-pct for entries signalled while regime=='uptrend' "
+             "(SwingMomentumStrategy). Default: unset, i.e. identical to --position-size-pct.",
+    )
+    p.add_argument(
+        "--position-size-pct-downtrend",
+        type=float,
+        default=None,
+        dest="position_size_pct_downtrend",
+        help="Override --position-size-pct for entries signalled while regime=='downtrend' "
+             "(MeanReversionStrategy). Default: unset, i.e. identical to --position-size-pct.",
+    )
+    p.add_argument(
         "--time-stop-minutes",
         type=float,
         default=60.0,
@@ -509,6 +525,8 @@ def main() -> None:
     engine.time_stop_minutes = args.time_stop_minutes
     engine.time_stop_loss_pct = args.time_stop_loss_pct
     engine.position_size_pct = args.position_size_pct
+    engine.position_size_pct_uptrend = args.position_size_pct_uptrend
+    engine.position_size_pct_downtrend = args.position_size_pct_downtrend
     if args.exclude_symbols:
         engine.symbol_blacklist = args.exclude_symbols
         logger.info("Symbol blacklist applied", excluded=args.exclude_symbols)

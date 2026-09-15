@@ -297,6 +297,128 @@ class TestOpenPosition:
         # (1,000,000 * 0.20) / 50,000 = 4.0
         assert amount == Decimal("4")
 
+    def test_position_size_pct_uptrend_defaults_to_none(self, engine):
+        assert engine.position_size_pct_uptrend is None
+
+    def test_position_size_pct_uptrend_setter(self, engine):
+        engine.position_size_pct_uptrend = 0.10
+        assert engine.position_size_pct_uptrend == 0.10
+
+    def test_no_signal_uses_base_pct_even_with_uptrend_override_set(
+        self, engine, exchange, portfolio
+    ):
+        """signal_=None(기존 테스트들과 동일 호출 형태) — regime을 알 수 없으므로
+        uptrend 오버라이드가 설정돼 있어도 기존 position_size_pct 그대로 써야 한다."""
+        portfolio.cash = Decimal("1000000")
+        engine.position_size_pct = 0.20
+        engine.position_size_pct_uptrend = 0.05
+        exchange.get_ticker.return_value = _make_ticker(50000.0)
+
+        engine._open_position("BTC/USDT")
+
+        amount = portfolio.open_position.call_args[1]["amount"]
+        assert amount == Decimal("4")  # (1,000,000 * 0.20) / 50,000
+
+    def test_uptrend_regime_uses_override_pct_when_set(self, engine, exchange, portfolio):
+        portfolio.cash = Decimal("1000000")
+        engine.position_size_pct = 0.20
+        engine.position_size_pct_uptrend = 0.05
+        exchange.get_ticker.return_value = _make_ticker(50000.0)
+        signal_ = MagicMock(metadata={"regime": "uptrend"})
+
+        engine._open_position("BTC/USDT", signal_)
+
+        amount = portfolio.open_position.call_args[1]["amount"]
+        # (1,000,000 * 0.05) / 50,000 = 1.0 — not the base 0.20
+        assert amount == Decimal("1")
+
+    def test_ranging_regime_ignores_uptrend_override(self, engine, exchange, portfolio):
+        portfolio.cash = Decimal("1000000")
+        engine.position_size_pct = 0.20
+        engine.position_size_pct_uptrend = 0.05
+        exchange.get_ticker.return_value = _make_ticker(50000.0)
+        signal_ = MagicMock(metadata={"regime": "ranging"})
+
+        engine._open_position("BTC/USDT", signal_)
+
+        amount = portfolio.open_position.call_args[1]["amount"]
+        assert amount == Decimal("4")  # base pct, override only applies to uptrend
+
+    def test_uptrend_regime_uses_base_pct_when_override_unset(
+        self, engine, exchange, portfolio
+    ):
+        """오버라이드가 None(기본값)이면 uptrend여도 기존 동작과 동일해야 한다
+        — 배선만 해둔 상태에서 라이브 영향이 없음을 보장하는 핵심 회귀 테스트."""
+        portfolio.cash = Decimal("1000000")
+        engine.position_size_pct = 0.20
+        exchange.get_ticker.return_value = _make_ticker(50000.0)
+        signal_ = MagicMock(metadata={"regime": "uptrend"})
+
+        engine._open_position("BTC/USDT", signal_)
+
+        amount = portfolio.open_position.call_args[1]["amount"]
+        assert amount == Decimal("4")
+
+    def test_position_size_pct_downtrend_defaults_to_none(self, engine):
+        assert engine.position_size_pct_downtrend is None
+
+    def test_position_size_pct_downtrend_setter(self, engine):
+        engine.position_size_pct_downtrend = 0.10
+        assert engine.position_size_pct_downtrend == 0.10
+
+    def test_downtrend_regime_uses_override_pct_when_set(self, engine, exchange, portfolio):
+        portfolio.cash = Decimal("1000000")
+        engine.position_size_pct = 0.20
+        engine.position_size_pct_downtrend = 0.05
+        exchange.get_ticker.return_value = _make_ticker(50000.0)
+        signal_ = MagicMock(metadata={"regime": "downtrend"})
+
+        engine._open_position("BTC/USDT", signal_)
+
+        amount = portfolio.open_position.call_args[1]["amount"]
+        # (1,000,000 * 0.05) / 50,000 = 1.0 — not the base 0.20
+        assert amount == Decimal("1")
+
+    def test_downtrend_regime_uses_base_pct_when_override_unset(
+        self, engine, exchange, portfolio
+    ):
+        portfolio.cash = Decimal("1000000")
+        engine.position_size_pct = 0.20
+        exchange.get_ticker.return_value = _make_ticker(50000.0)
+        signal_ = MagicMock(metadata={"regime": "downtrend"})
+
+        engine._open_position("BTC/USDT", signal_)
+
+        amount = portfolio.open_position.call_args[1]["amount"]
+        assert amount == Decimal("4")
+
+    def test_ranging_regime_ignores_downtrend_override(self, engine, exchange, portfolio):
+        portfolio.cash = Decimal("1000000")
+        engine.position_size_pct = 0.20
+        engine.position_size_pct_downtrend = 0.05
+        exchange.get_ticker.return_value = _make_ticker(50000.0)
+        signal_ = MagicMock(metadata={"regime": "ranging"})
+
+        engine._open_position("BTC/USDT", signal_)
+
+        amount = portfolio.open_position.call_args[1]["amount"]
+        assert amount == Decimal("4")  # base pct, downtrend override doesn't apply to ranging
+
+    def test_uptrend_and_downtrend_overrides_apply_independently(
+        self, engine, exchange, portfolio
+    ):
+        portfolio.cash = Decimal("1000000")
+        engine.position_size_pct = 0.20
+        engine.position_size_pct_uptrend = 0.08
+        engine.position_size_pct_downtrend = 0.05
+        exchange.get_ticker.return_value = _make_ticker(50000.0)
+
+        engine._open_position("BTC/USDT", MagicMock(metadata={"regime": "downtrend"}))
+        assert portfolio.open_position.call_args[1]["amount"] == Decimal("1")  # 0.05
+
+        engine._open_position("BTC/USDT", MagicMock(metadata={"regime": "uptrend"}))
+        assert portfolio.open_position.call_args[1]["amount"] == Decimal("1.6")  # 0.08
+
     def test_live_mode_calls_exchange_place_order(
         self, settings, exchange, strategy, risk_manager, portfolio, telegram
     ):

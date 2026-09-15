@@ -40,6 +40,8 @@ DEFAULT_RISK = {
     "time_stop_minutes": 60.0,
     "time_stop_loss_pct": 0.5,
     "position_size_pct": 0.25,
+    "position_size_pct_uptrend": None,  # None = --position-size-pct-uptrend 플래그 생략(기존과 동일)
+    "position_size_pct_downtrend": None,  # None = --position-size-pct-downtrend 플래그 생략(기존과 동일)
     "consecutive_loss_limit": 3,             # 0 = circuit breaker disabled
     "consecutive_loss_cooldown_minutes": 720,  # 12h
 }
@@ -65,6 +67,16 @@ def main() -> None:
         f"--position-size-pct {risk['position_size_pct']}",
         f"--consecutive-loss-limit {risk['consecutive_loss_limit']}",
         f"--consecutive-loss-cooldown-min {risk['consecutive_loss_cooldown_minutes']}",
+        *(
+            [f"--position-size-pct-uptrend {risk['position_size_pct_uptrend']}"]
+            if risk.get("position_size_pct_uptrend") is not None
+            else []
+        ),
+        *(
+            [f"--position-size-pct-downtrend {risk['position_size_pct_downtrend']}"]
+            if risk.get("position_size_pct_downtrend") is not None
+            else []
+        ),
     ]
     print(" ".join(parts))
 

@@ -65,6 +65,7 @@ class _OpenPosition:
     entry_price: Decimal
     stop_loss: Decimal
     take_profit: Decimal
+    regime: str | None = None
 
 
 def _bar_path(row: pd.Series) -> list[Decimal]:
@@ -135,6 +136,7 @@ def _open_position(
 ) -> _OpenPosition:
     price = Decimal(str(signal.metadata.get("price", row.close)))
     atr_val = signal.metadata.get("atr") if signal.metadata else None
+    regime = signal.metadata.get("regime") if signal.metadata else None
     raw_stop_loss = risk_manager.calculate_stop_loss(
         price, side="buy",
         atr_value=float(atr_val) if atr_val else None,
@@ -149,7 +151,7 @@ def _open_position(
     )
     return _OpenPosition(
         entry_bar=bar_idx, entry_time=row.timestamp, entry_price=price,
-        stop_loss=stop_loss, take_profit=take_profit,
+        stop_loss=stop_loss, take_profit=take_profit, regime=regime,
     )
 
 
@@ -162,7 +164,7 @@ def _make_trade(
     return Trade(
         symbol=symbol, side="buy", entry_price=pos.entry_price, exit_price=exit_price,
         amount=amount, entry_time=pos.entry_time, exit_time=exit_time,
-        commission=commission, exit_reason=reason,
+        commission=commission, exit_reason=reason, regime=pos.regime,
     )
 
 
