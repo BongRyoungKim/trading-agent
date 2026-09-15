@@ -51,6 +51,11 @@ class MeanReversionStrategy(BaseStrategy):
         sma_period:          추세 필터 SMA 기간 (기본 200). 0이면 비활성화.
         sma_floor:           가격이 SMA × 이 배수 이상이어야 진입 (기본 0.85).
                              초강세 하락장 (SMA 대비 -15% 이상 하락) 진입 차단.
+        exit_momentum_gate:  RSI 단기 과매수(rsi_exit_fast) 청산에 MACD 모멘텀
+                             게이트 적용 여부 (기본 False=비활성, 기존 동작 유지).
+                             True면 MACD 히스토그램이 양수+상승 중(모멘텀 지속)
+                             일 때는 이 청산을 보류한다. rsi_exit(중기 회복)
+                             안전판은 게이트와 무관하게 항상 그대로 청산한다.
     """
 
     def __init__(
@@ -67,6 +72,7 @@ class MeanReversionStrategy(BaseStrategy):
         sma_period: int = 0,
         sma_floor: float = 0.85,
         no_entry_hours_utc: list | None = None,
+        exit_momentum_gate: bool = False,
     ) -> None:
         if not (0 < rsi_oversold_fast < rsi_oversold_slow < rsi_exit <= 100):
             raise ValueError(
@@ -87,6 +93,7 @@ class MeanReversionStrategy(BaseStrategy):
         self._sma_floor = sma_floor
         # [0,1,2] = 09-11 KST (worst performing window from backanalysis)
         self._no_entry_hours_utc: frozenset[int] = frozenset(no_entry_hours_utc or [])
+        self._exit_momentum_gate = exit_momentum_gate
 
     @property
     def name(self) -> str:
@@ -118,6 +125,7 @@ class MeanReversionStrategy(BaseStrategy):
             "sma_period":        self._sma_period,
             "sma_floor":         self._sma_floor,
             "atr_period":        self._atr_period,
+            "exit_momentum_gate": self._exit_momentum_gate,
         }
 
     def generate_signal(self, data: pd.DataFrame) -> Signal:
@@ -201,6 +209,17 @@ class MeanReversionStrategy(BaseStrategy):
         }
 
         # ── SELL: RSI 회복 ─────────────────────────────────────────────────────
+        # 모멘텀 게이트: MACD 히스토그램이 양수이면서 계속 상승 중이면 아직
+        # 추세가 살아있다고 보고, RSI 단기 과매수(rsi_exit_fast) 청산을 보류
+        # 한다. rsi_exit(중기 회복) 안전판은 게이트와 무관하게 항상 청산한다.
+        macd_still_building = (
+            self._exit_momentum_gate
+            and macd_hist is not None
+            and macd_hist_prev is not None
+            and macd_hist > 0
+            and macd_hist >= macd_hist_prev
+        )
+
         if rsi_s_now >= self._rsi_exit:
             return Signal(
                 symbol=self._symbol,
@@ -210,7 +229,7 @@ class MeanReversionStrategy(BaseStrategy):
                 timestamp=timestamp,
                 metadata=meta,
             )
-        if rsi_f_now >= self._rsi_exit_fast:
+        if rsi_f_now >= self._rsi_exit_fast and not macd_still_building:
             return Signal(
                 symbol=self._symbol,
                 action=SignalAction.SELL,
@@ -266,6 +285,8 @@ class MeanReversionStrategy(BaseStrategy):
             missing.append(f"시간대차단({current_hour_utc}UTC)")
         if not macd_momentum_ok:
             missing.append(f"MACD역전({macd_hist_prev:.4f}→{macd_hist:.4f})")
+        if macd_still_building:
+            missing.append(f"모멘텀지속(청산유예, RSI5={rsi_f_now:.1f})")
 
         return Signal(
             symbol=self._symbol,

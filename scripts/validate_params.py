@@ -46,7 +46,8 @@ _STRATEGY_KEYS = (
     "adx_trend_threshold", "mr_vol_mult", "mr_rsi_oversold_fast",
     "mr_rsi_oversold_slow", "mr_rsi_exit", "mr_rsi_exit_fast",
     "mr_no_entry_hours_utc", "mr_sma_period", "mr_sma_floor",
-    "sm_vol_mult", "sm_adx_threshold",
+    "mr_exit_momentum_gate",
+    "sm_vol_mult", "sm_adx_threshold", "sm_rsi_oversold",
 )
 
 

@@ -50,8 +50,12 @@ class RegimeAdaptiveStrategy(BaseStrategy):
                                 가격이 SMA×mr_sma_floor 아래로 이격되면 진입 차단.
         mr_sma_floor:          장기추세 필터 이격 허용 배수 (기본 0.85).
                                 mr_sma_period=0이면 사용되지 않음.
+        mr_exit_momentum_gate: MeanReversion RSI 단기 과매수 청산에 MACD
+                                모멘텀 게이트 적용 여부 (기본 False).
         sm_vol_mult:           SwingMomentum 거래량 배수 (기본 1.5).
         sm_adx_threshold:      SwingMomentum 내부 추세 강도 기준 (기본 28.0).
+        sm_rsi_oversold:       SwingMomentum 과매도 재진입 기준 — 최근 4봉 안에
+                                RSI가 이 값 아래를 찍어야 진입 허용 (기본 40.0).
     """
 
     def __init__(
@@ -68,8 +72,10 @@ class RegimeAdaptiveStrategy(BaseStrategy):
         mr_no_entry_hours_utc: list | None = None,
         mr_sma_period: int = 0,
         mr_sma_floor: float = 0.85,
+        mr_exit_momentum_gate: bool = False,
         sm_vol_mult: float = 1.5,
         sm_adx_threshold: float = 28.0,
+        sm_rsi_oversold: float = 40.0,
     ) -> None:
         if ema_fast >= ema_slow:
             raise ValueError(f"ema_fast ({ema_fast}) must be < ema_slow ({ema_slow})")
@@ -91,11 +97,13 @@ class RegimeAdaptiveStrategy(BaseStrategy):
             no_entry_hours_utc=mr_no_entry_hours_utc,
             sma_period=mr_sma_period,
             sma_floor=mr_sma_floor,
+            exit_momentum_gate=mr_exit_momentum_gate,
         )
         self._swing_momentum = SwingMomentumStrategy(
             symbol=symbol,
             vol_mult=sm_vol_mult,
             adx_threshold=sm_adx_threshold,
+            rsi_oversold=sm_rsi_oversold,
         )
 
     @property

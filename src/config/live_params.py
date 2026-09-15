@@ -61,8 +61,16 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # 값은 render_launch_args 쪽과 동일하게 맞춘다(0=필터 비활성).
         "mr_sma_period": 0,
         "mr_sma_floor": 0.85,
+        # mr_exit_momentum_gate: bool이라 PARAM_BOUNDS(자동튜너 스텝캡/클램프)
+        # 대상이 아님 — mr_no_entry_hours_utc와 동일 취급. False=기존 동작 유지.
+        "mr_exit_momentum_gate": False,
         "sm_vol_mult": 1.5,
         "sm_adx_threshold": 28.0,
+        # sm_rsi_oversold: PARAM_BOUNDS에는 넣지 않음 — 자동튜너 대상이 아니라
+        # docs/research-protocol.md 리서치 라운드 전용 실험 파라미터. 40.0은
+        # SwingMomentumStrategy의 기존 하드코딩 기본값과 동일해 배선만으로는
+        # 라이브 동작이 바뀌지 않는다.
+        "sm_rsi_oversold": 40.0,
     },
     "risk": {
         "sl_floor_pct": 3.0,

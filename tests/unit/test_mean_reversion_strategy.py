@@ -376,3 +376,63 @@ class TestMeanReversionBarTimestampHourFilter:
             sig = s.generate_signal(df)
 
         assert sig.action == SignalAction.BUY
+
+
+class TestMeanReversionExitMomentumGate:
+    """
+    VANA/KRW 실거래(2026-09-15 08:14 진입 -> 09:05 청산) 사후분석: RSI5가
+    70을 넘자마자 기계적으로 청산했는데, 청산 직후에도 가격/RSI가 계속
+    올랐다 — 아직 상승 모멘텀이 살아있는데도 RSI 임계값만 보고 판 사례.
+
+    exit_momentum_gate=True면 MACD 히스토그램이 "양수이면서 계속 상승 중"인
+    동안은 RSI 단기 과매수(rsi_exit_fast) 신호청산을 보류한다. 중기 회복
+    (rsi_exit) 청산은 안전판이므로 게이트와 무관하게 그대로 작동해야 한다.
+    """
+
+    def test_default_gate_off_preserves_existing_sell_behavior(self):
+        # 회귀 확인: exit_momentum_gate 기본값(False)에서는 기존
+        # test_sell_fast_rsi_branch와 동일하게 그대로 SELL이 나와야 한다.
+        s = MeanReversionStrategy("BTC/KRW", rsi_exit=99.0, rsi_exit_fast=50.0)
+        df = _make_df(_rising(100, pct=0.8))
+        sig = s.generate_signal(df)
+        assert sig.action == SignalAction.SELL
+
+    def test_gate_on_suppresses_fast_rsi_exit_while_macd_still_building(self):
+        # 꾸준히 오르는 가격 -> MACD 히스토그램이 자연히 양수+상승 상태.
+        # 게이트가 켜져 있으면 RSI5 과매수만으로는 청산하지 않아야 한다.
+        s = MeanReversionStrategy(
+            "BTC/KRW", rsi_exit=99.0, rsi_exit_fast=50.0,
+            exit_momentum_gate=True,
+        )
+        df = _make_df(_rising(100, pct=0.8))
+        sig = s.generate_signal(df)
+        assert sig.action != SignalAction.SELL
+
+    def test_gate_still_exits_once_macd_momentum_turns_down(self):
+        # 꾸준히 오르다 마지막 몇 봉이 평평해짐(급락이 아님) -> RSI는 여전히
+        # 과매수권에 머무르지만 MACD 히스토그램 상승세는 꺾인다. 게이트가
+        # 켜져 있어도 모멘텀이 죽으면 무한 보류가 아니라 정상 청산돼야 한다.
+        prices = _rising(90, pct=0.8)
+        prices += [prices[-1]] * 6
+        s = MeanReversionStrategy(
+            "BTC/KRW", rsi_exit=99.0, rsi_exit_fast=30.0,
+            exit_momentum_gate=True,
+        )
+        df = _make_df(prices)
+        sig = s.generate_signal(df)
+        assert sig.action == SignalAction.SELL
+
+    def test_mid_term_rsi_exit_ignores_gate(self):
+        # rsi_exit(중기) 안전판은 게이트와 무관하게 항상 그대로 청산돼야 한다.
+        s = MeanReversionStrategy(
+            "BTC/KRW", rsi_exit=50.0, rsi_exit_fast=99.0,
+            exit_momentum_gate=True,
+        )
+        df = _make_df(_rising(100, pct=0.8))
+        sig = s.generate_signal(df)
+        assert sig.action == SignalAction.SELL
+        assert "중기" in sig.reason
+
+    def test_get_parameters_includes_exit_momentum_gate(self):
+        s = MeanReversionStrategy("BTC/KRW", exit_momentum_gate=True)
+        assert s.get_parameters()["exit_momentum_gate"] is True

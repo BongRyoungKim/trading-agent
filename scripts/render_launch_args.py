@@ -27,8 +27,10 @@ DEFAULT_STRATEGY_PARAMS = {
     "mr_no_entry_hours_utc": [17, 18, 19, 20],
     "mr_sma_period": 0,      # 0 = long-term trend filter disabled (backward compatible)
     "mr_sma_floor": 0.85,
+    "mr_exit_momentum_gate": False,
     "sm_vol_mult": 1.5,
     "sm_adx_threshold": 28.0,
+    "sm_rsi_oversold": 40.0,
 }
 DEFAULT_RISK = {
     "sl_floor_pct": 3.0,
