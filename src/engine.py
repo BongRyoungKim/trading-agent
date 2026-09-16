@@ -101,6 +101,7 @@ class TradingEngine:
         self._position_size_pct: float = 0.25
         self._position_size_pct_uptrend: float | None = None
         self._position_size_pct_downtrend: float | None = None
+        self._htf_timeframe: str | None = None
         self._start_time: float | None = None
         self._data_validator = OHLCVValidator()
         self._scheduler = BackgroundScheduler(daemon=True)
@@ -255,6 +256,14 @@ class TradingEngine:
     @position_size_pct_downtrend.setter
     def position_size_pct_downtrend(self, value: float | None) -> None:
         self._position_size_pct_downtrend = float(value) if value is not None else None
+
+    @property
+    def htf_timeframe(self) -> str | None:
+        return self._htf_timeframe
+
+    @htf_timeframe.setter
+    def htf_timeframe(self, value: str | None) -> None:
+        self._htf_timeframe = value
 
     @property
     def symbol_blacklist(self) -> frozenset[str]:
@@ -706,7 +715,13 @@ class TradingEngine:
                 issues=validation.issues,
             )
             return
-        signal_ = strategy.generate_signal(df)
+        if self._htf_timeframe:
+            htf_df = self._exchange.get_ohlcv_dataframe(
+                symbol, timeframe=self._htf_timeframe, limit=200
+            )
+            signal_ = strategy.generate_signal(df, higher_tf_data=htf_df)
+        else:
+            signal_ = strategy.generate_signal(df)
 
         logger.info(
             f"Tick | {symbol} → {signal_.action.name} | {signal_.reason[:80]}"

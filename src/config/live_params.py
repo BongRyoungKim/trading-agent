@@ -49,6 +49,11 @@ MAX_STEP_FRACTION = 0.20
 DEFAULTS: dict[str, dict[str, Any]] = {
     "strategy_params": {
         "adx_trend_threshold": 25.0,
+        # htf_* : 상위 시간봉(1h 등) 국면판정 전용 임계값. 값이 검증되기 전까지는
+        # PARAM_BOUNDS에 넣지 않고 수동 설정 전용으로 취급(sm_rsi_oversold 도입 때와 동일 패턴).
+        "htf_adx_threshold": 25.0,
+        "htf_ema_fast": 20,
+        "htf_ema_slow": 50,
         "mr_vol_mult": 2.0,
         "mr_rsi_oversold_fast": 20.0,
         "mr_rsi_oversold_slow": 30.0,
@@ -64,6 +69,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # mr_exit_momentum_gate: bool이라 PARAM_BOUNDS(자동튜너 스텝캡/클램프)
         # 대상이 아님 — mr_no_entry_hours_utc와 동일 취급. False=기존 동작 유지.
         "mr_exit_momentum_gate": False,
+        "mr_htf_block_on_downtrend": False,
         "sm_vol_mult": 1.5,
         "sm_adx_threshold": 28.0,
         # sm_rsi_oversold: PARAM_BOUNDS에는 넣지 않음 — 자동튜너 대상이 아니라

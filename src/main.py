@@ -249,6 +249,15 @@ def _build_parser() -> argparse.ArgumentParser:
              "(MeanReversionStrategy). Default: unset, i.e. identical to --position-size-pct.",
     )
     p.add_argument(
+        "--htf-timeframe",
+        type=str,
+        default=None,
+        dest="htf_timeframe",
+        help="Higher timeframe (e.g. '1h') to additionally fetch and pass as "
+             "higher_tf_data to generate_signal(), for multi-timeframe confirmation. "
+             "Default: unset, i.e. no extra fetch, no behaviour change.",
+    )
+    p.add_argument(
         "--time-stop-minutes",
         type=float,
         default=60.0,
@@ -527,6 +536,7 @@ def main() -> None:
     engine.position_size_pct = args.position_size_pct
     engine.position_size_pct_uptrend = args.position_size_pct_uptrend
     engine.position_size_pct_downtrend = args.position_size_pct_downtrend
+    engine.htf_timeframe = args.htf_timeframe
     if args.exclude_symbols:
         engine.symbol_blacklist = args.exclude_symbols
         logger.info("Symbol blacklist applied", excluded=args.exclude_symbols)

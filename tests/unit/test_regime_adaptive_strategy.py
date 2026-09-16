@@ -296,3 +296,86 @@ class TestSwingMomentumDeathCrossUnreachableUnderUptrend:
             # 문구는 절대 등장하지 않아야 한다.
             assert inner.metadata["cond"]["uptrend"] is True
             assert "데스크로스" not in inner.reason
+
+
+class TestHigherTimeframeRegimePassthrough:
+    """
+    다중 시간봉 확인 필터: DOWNTREND 국면일 때만 상위 시간봉(higher_tf_data)의
+    국면을 계산해 MeanReversionStrategy에 htf_regime으로 전달한다. RANGING
+    경로는 검증된 기존 동작을 그대로 유지하기 위해 손대지 않는다.
+    """
+
+    def test_downtrend_passes_htf_regime_to_mean_reversion(self):
+        s = _make_strategy()
+        htf_df = _downtrend_data()  # detect_regime()이 "downtrend"로 판정할 데이터
+
+        with patch.object(
+            s._mean_reversion, "generate_signal", wraps=s._mean_reversion.generate_signal
+        ) as spy:
+            s.generate_signal(_downtrend_data(), higher_tf_data=htf_df)
+            spy.assert_called_once()
+            assert spy.call_args.kwargs.get("htf_regime") == "downtrend"
+
+    def test_ranging_does_not_pass_htf_regime(self):
+        s = _make_strategy()
+        htf_df = _downtrend_data()
+
+        with patch.object(
+            s._mean_reversion, "generate_signal", wraps=s._mean_reversion.generate_signal
+        ) as spy:
+            s.generate_signal(_ranging_data(), higher_tf_data=htf_df)
+            spy.assert_called_once()
+            assert "htf_regime" not in spy.call_args.kwargs
+
+    def test_no_higher_tf_data_leaves_htf_regime_none(self):
+        s = _make_strategy()
+
+        with patch.object(
+            s._mean_reversion, "generate_signal", wraps=s._mean_reversion.generate_signal
+        ) as spy:
+            s.generate_signal(_downtrend_data())
+            spy.assert_called_once()
+            assert spy.call_args.kwargs.get("htf_regime") is None
+
+
+class TestHtfRegimeThresholds:
+    """
+    1시간봉 다중 시간봉 필터가 validation에서 뒤집힌 원인 후보: htf 국면판정에
+    15분봉용 임계값(adx=25, ema=20/50)을 그대로 재사용했다. htf 전용 임계값을
+    분리해 15분봉 판정과 완전히 독립적으로 작동하는지 확인한다.
+    """
+
+    def test_defaults_match_15m_thresholds(self):
+        # 기본값은 방금 기각된 실험과 동일해야 한다 — 배선만으로는 무변경.
+        s = _make_strategy()
+        params = s.get_parameters()
+        assert params["htf_adx_threshold"] == 25.0
+        assert params["htf_ema_fast"] == 20
+        assert params["htf_ema_slow"] == 50
+
+    def test_extreme_htf_adx_threshold_forces_ranging_regardless_of_data(self):
+        # ADX는 이론상 100이 최댓값이라 150을 쓰면 어떤 데이터로도 도달
+        # 불가능 — htf 분류가 항상 ranging이어야 한다.
+        s = _make_strategy(htf_adx_threshold=150.0)
+        htf_df = _downtrend_data()  # 15분봉 기본 임계값(25)으로는 downtrend로 잡히는 데이터
+
+        with patch.object(
+            s._mean_reversion, "generate_signal", wraps=s._mean_reversion.generate_signal
+        ) as spy:
+            s.generate_signal(_downtrend_data(), higher_tf_data=htf_df)
+            assert spy.call_args.kwargs.get("htf_regime") == "ranging"
+
+    def test_htf_threshold_independent_of_15m_threshold(self):
+        # 15분봉 쪽 adx_trend_threshold는 기본(25)인데 htf_adx_threshold만
+        # 99로 올려도, 15분봉 자체의 regime 판정(우리가 downtrend로 라우팅
+        # 되는 것 자체)은 영향받지 않아야 한다 — 두 임계값이 서로 독립적.
+        s = _make_strategy(htf_adx_threshold=99.0)
+        signal = s.generate_signal(_downtrend_data())
+        assert "[DOWNTREND]" in signal.reason
+
+    def test_get_parameters_includes_htf_thresholds(self):
+        s = _make_strategy(htf_adx_threshold=30.0, htf_ema_fast=10, htf_ema_slow=40)
+        params = s.get_parameters()
+        assert params["htf_adx_threshold"] == 30.0
+        assert params["htf_ema_fast"] == 10
+        assert params["htf_ema_slow"] == 40

@@ -54,7 +54,9 @@ class BaseStrategy(ABC):
         """Unique strategy identifier, e.g. 'ma_crossover_20_50'."""
 
     @abstractmethod
-    def generate_signal(self, data: pd.DataFrame) -> Signal:
+    def generate_signal(
+        self, data: pd.DataFrame, higher_tf_data: pd.DataFrame | None = None,
+    ) -> Signal:
         """
         Analyse market data and return a Signal.
 
@@ -62,6 +64,11 @@ class BaseStrategy(ABC):
             data: OHLCV DataFrame (oldest row first).
                   Must contain columns: open, high, low, close, volume, timestamp.
                   May contain additional pre-computed indicator columns.
+            higher_tf_data: Optional coarser-timeframe OHLCV DataFrame (e.g. 1h
+                  when `data` is 15m), for strategies that confirm entries
+                  against a higher-timeframe trend. Most strategies ignore
+                  this; only pass it when the caller actually has it — never
+                  required, always None-safe.
 
         Returns:
             Signal with the recommended action.

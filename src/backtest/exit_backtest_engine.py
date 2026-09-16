@@ -31,7 +31,7 @@ from src.risk.exit_rules import (
 )
 from src.risk.manager import RiskManager
 from src.strategy.base import BaseStrategy
-from src.strategy.models import SignalAction
+from src.strategy.models import Signal, SignalAction
 
 
 @dataclass(frozen=True)
@@ -82,12 +82,26 @@ def _bar_path(row: pd.Series) -> list[Decimal]:
     return [o, h, low_, c]
 
 
+def _generate_signal(strategy: BaseStrategy, win_df: pd.DataFrame, htf_df: pd.DataFrame | None, ts) -> Signal:
+    """
+    Calls strategy.generate_signal(), passing a timestamp-sliced higher_tf_data
+    only when htf_df was actually supplied — strategies that don't accept the
+    kwarg (10 of the 11 production strategies, as of this writing) are never
+    passed it, so this stays zero-diff for every backtest that doesn't opt in.
+    """
+    if htf_df is None:
+        return strategy.generate_signal(win_df)
+    htf_slice = htf_df[htf_df["timestamp"] <= ts]
+    return strategy.generate_signal(win_df, higher_tf_data=htf_slice)
+
+
 def run_exit_backtest(
     df: pd.DataFrame,
     strategy: BaseStrategy,
     risk_manager: RiskManager,
     config: ExitBacktestConfig,
     symbol: str = "",
+    higher_tf_df: pd.DataFrame | None = None,
 ) -> list[Trade]:
     """
     Run a single-symbol, single-position-at-a-time backtest.
@@ -100,6 +114,11 @@ def run_exit_backtest(
             raw SL distance) — matches TradingEngine._open_position exactly.
         config: risk knobs, see ExitBacktestConfig.
         symbol: label attached to each returned Trade.
+        higher_tf_df: optional coarser-timeframe OHLCV (e.g. 1h when `df` is
+            15m), for multi-timeframe-confirmation strategies. When given,
+            each bar is passed the higher_tf_df slice up to (and including)
+            that bar's own timestamp — never a look-ahead peek. Default None
+            preserves the exact prior call signature (no kwarg passed at all).
 
     Returns:
         list[Trade] (src.backtest.models.Trade) — feed into
@@ -115,12 +134,14 @@ def run_exit_backtest(
         win_df = df.iloc[j - window + 1 : j + 1].reset_index(drop=True)
 
         if pos is not None:
-            closed = _try_close_open_position(trades, pos, row, strategy, win_df, config, symbol)
+            closed = _try_close_open_position(
+                trades, pos, row, strategy, win_df, config, symbol, higher_tf_df,
+            )
             if closed:
                 pos = None
             continue
 
-        signal = strategy.generate_signal(win_df)
+        signal = _generate_signal(strategy, win_df, higher_tf_df, row.timestamp)
         if signal.action == SignalAction.BUY:
             pos = _open_position(j, row, signal, risk_manager, config)
 
@@ -176,6 +197,7 @@ def _try_close_open_position(
     win_df: pd.DataFrame,
     config: ExitBacktestConfig,
     symbol: str,
+    higher_tf_df: pd.DataFrame | None = None,
 ) -> bool:
     """Returns True if the position was closed this bar (and appends the Trade)."""
     for point in _bar_path(row):
@@ -195,7 +217,7 @@ def _try_close_open_position(
             trades.append(_make_trade(pos, row.timestamp, point, decision.reason, config, symbol))
             return True
 
-    signal = strategy.generate_signal(win_df)
+    signal = _generate_signal(strategy, win_df, higher_tf_df, row.timestamp)
     if signal.action == SignalAction.SELL:
         hold_seconds = (row.timestamp - pos.entry_time).total_seconds()
         price_now = Decimal(str(signal.metadata.get("price", row.close)))

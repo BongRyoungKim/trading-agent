@@ -56,6 +56,10 @@ class MeanReversionStrategy(BaseStrategy):
                              True면 MACD 히스토그램이 양수+상승 중(모멘텀 지속)
                              일 때는 이 청산을 보류한다. rsi_exit(중기 회복)
                              안전판은 게이트와 무관하게 항상 그대로 청산한다.
+        htf_block_on_downtrend: 상위 시간봉(예: 1시간봉)도 downtrend일 때
+                             진입 보류 여부 (기본 False). generate_signal의
+                             htf_regime 인자로 상위 시간봉 국면을 받는다 —
+                             호출자가 넘겨주지 않으면(None) 항상 진입 허용.
     """
 
     def __init__(
@@ -73,6 +77,7 @@ class MeanReversionStrategy(BaseStrategy):
         sma_floor: float = 0.85,
         no_entry_hours_utc: list | None = None,
         exit_momentum_gate: bool = False,
+        htf_block_on_downtrend: bool = False,
     ) -> None:
         if not (0 < rsi_oversold_fast < rsi_oversold_slow < rsi_exit <= 100):
             raise ValueError(
@@ -94,6 +99,7 @@ class MeanReversionStrategy(BaseStrategy):
         # [0,1,2] = 09-11 KST (worst performing window from backanalysis)
         self._no_entry_hours_utc: frozenset[int] = frozenset(no_entry_hours_utc or [])
         self._exit_momentum_gate = exit_momentum_gate
+        self._htf_block_on_downtrend = htf_block_on_downtrend
 
     @property
     def name(self) -> str:
@@ -126,9 +132,12 @@ class MeanReversionStrategy(BaseStrategy):
             "sma_floor":         self._sma_floor,
             "atr_period":        self._atr_period,
             "exit_momentum_gate": self._exit_momentum_gate,
+            "htf_block_on_downtrend": self._htf_block_on_downtrend,
         }
 
-    def generate_signal(self, data: pd.DataFrame) -> Signal:
+    def generate_signal(
+        self, data: pd.DataFrame, htf_regime: str | None = None,
+    ) -> Signal:
         self.validate_data(data)
 
         close  = data["close"]
@@ -242,6 +251,7 @@ class MeanReversionStrategy(BaseStrategy):
         # ── BUY: 과매도 반등 ───────────────────────────────────────────────────
         current_hour_utc = timestamp.hour
         time_ok = current_hour_utc not in self._no_entry_hours_utc
+        htf_ok = not (self._htf_block_on_downtrend and htf_regime == "downtrend")
 
         buy_condition = (
             rsi_f_now < self._rsi_oversold_fast
@@ -251,6 +261,7 @@ class MeanReversionStrategy(BaseStrategy):
             and sma_ok
             and time_ok
             and macd_momentum_ok
+            and htf_ok
         )
         if buy_condition:
             # 과매도 깊이 기반 강도 계산 (더 낮을수록 강한 신호)
@@ -285,6 +296,8 @@ class MeanReversionStrategy(BaseStrategy):
             missing.append(f"시간대차단({current_hour_utc}UTC)")
         if not macd_momentum_ok:
             missing.append(f"MACD역전({macd_hist_prev:.4f}→{macd_hist:.4f})")
+        if not htf_ok:
+            missing.append(f"상위봉하락추세({htf_regime})")
         if macd_still_building:
             missing.append(f"모멘텀지속(청산유예, RSI5={rsi_f_now:.1f})")
 

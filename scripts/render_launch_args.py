@@ -19,6 +19,9 @@ PARAMS_FILE = ROOT / ".strategy_params.json"
 
 DEFAULT_STRATEGY_PARAMS = {
     "adx_trend_threshold": 25.0,
+    "htf_adx_threshold": 25.0,
+    "htf_ema_fast": 20,
+    "htf_ema_slow": 50,
     "mr_vol_mult": 2.0,
     "mr_rsi_oversold_fast": 20.0,
     "mr_rsi_oversold_slow": 30.0,
@@ -28,6 +31,7 @@ DEFAULT_STRATEGY_PARAMS = {
     "mr_sma_period": 0,      # 0 = long-term trend filter disabled (backward compatible)
     "mr_sma_floor": 0.85,
     "mr_exit_momentum_gate": False,
+    "mr_htf_block_on_downtrend": False,
     "sm_vol_mult": 1.5,
     "sm_adx_threshold": 28.0,
     "sm_rsi_oversold": 40.0,
@@ -42,6 +46,7 @@ DEFAULT_RISK = {
     "position_size_pct": 0.25,
     "position_size_pct_uptrend": None,  # None = --position-size-pct-uptrend 플래그 생략(기존과 동일)
     "position_size_pct_downtrend": None,  # None = --position-size-pct-downtrend 플래그 생략(기존과 동일)
+    "htf_timeframe": None,  # None = --htf-timeframe 플래그 생략(추가 API 호출 없음, 기존과 동일)
     "consecutive_loss_limit": 3,             # 0 = circuit breaker disabled
     "consecutive_loss_cooldown_minutes": 720,  # 12h
 }
@@ -75,6 +80,11 @@ def main() -> None:
         *(
             [f"--position-size-pct-downtrend {risk['position_size_pct_downtrend']}"]
             if risk.get("position_size_pct_downtrend") is not None
+            else []
+        ),
+        *(
+            [f"--htf-timeframe {risk['htf_timeframe']}"]
+            if risk.get("htf_timeframe") is not None
             else []
         ),
     ]

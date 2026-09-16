@@ -436,3 +436,42 @@ class TestMeanReversionExitMomentumGate:
     def test_get_parameters_includes_exit_momentum_gate(self):
         s = MeanReversionStrategy("BTC/KRW", exit_momentum_gate=True)
         assert s.get_parameters()["exit_momentum_gate"] is True
+
+
+class TestHigherTimeframeFilter:
+    """
+    9/16 국면별 사이징 리서치에서 DOWNTREND 국면 MeanReversion 거래의 PF가
+    RANGING보다 뚜렷이 낮다는 게 확인됨 — 15분봉 과매도 반등이 사실 더 큰
+    하락의 일부일 수 있다는 가설. htf_block_on_downtrend=True면 상위
+    시간봉(예: 1시간봉)도 downtrend일 때 진입을 보류한다.
+    """
+
+    def test_default_off_ignores_htf_regime(self):
+        # 회귀 확인: 플래그 기본값(False)에서는 htf_regime이 뭐든 무시하고
+        # 기존과 동일하게 BUY가 나와야 한다.
+        df = _make_buy_ready_df(last_bar_hour=12)
+        s = MeanReversionStrategy("BTC/KRW")
+        sig = s.generate_signal(df, htf_regime="downtrend")
+        assert sig.action == SignalAction.BUY
+
+    def test_flag_on_blocks_buy_when_htf_is_downtrend(self):
+        df = _make_buy_ready_df(last_bar_hour=12)
+        s = MeanReversionStrategy("BTC/KRW", htf_block_on_downtrend=True)
+        sig = s.generate_signal(df, htf_regime="downtrend")
+        assert sig.action == SignalAction.HOLD
+
+    def test_flag_on_allows_buy_when_htf_is_ranging(self):
+        df = _make_buy_ready_df(last_bar_hour=12)
+        s = MeanReversionStrategy("BTC/KRW", htf_block_on_downtrend=True)
+        sig = s.generate_signal(df, htf_regime="ranging")
+        assert sig.action == SignalAction.BUY
+
+    def test_flag_on_allows_buy_when_htf_regime_not_provided(self):
+        df = _make_buy_ready_df(last_bar_hour=12)
+        s = MeanReversionStrategy("BTC/KRW", htf_block_on_downtrend=True)
+        sig = s.generate_signal(df)
+        assert sig.action == SignalAction.BUY
+
+    def test_get_parameters_includes_htf_block_on_downtrend(self):
+        s = MeanReversionStrategy("BTC/KRW", htf_block_on_downtrend=True)
+        assert s.get_parameters()["htf_block_on_downtrend"] is True

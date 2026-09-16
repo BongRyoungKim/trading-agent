@@ -33,6 +33,7 @@ class _ScriptedStrategy(BaseStrategy):
         self._call = 0
         self._atr = atr
         self._regime = regime
+        self.received_higher_tf_data: list[pd.DataFrame | None] = []
 
     @property
     def name(self) -> str:
@@ -44,7 +45,10 @@ class _ScriptedStrategy(BaseStrategy):
     def min_required_bars(self) -> int:
         return 1
 
-    def generate_signal(self, data: pd.DataFrame) -> Signal:
+    def generate_signal(
+        self, data: pd.DataFrame, higher_tf_data: pd.DataFrame | None = None,
+    ) -> Signal:
+        self.received_higher_tf_data.append(higher_tf_data)
         row = data.iloc[-1]
         idx = min(self._call, len(self._actions) - 1)
         action = self._actions[idx]
@@ -222,3 +226,41 @@ class TestRegimeLabel:
         strategy = _ScriptedStrategy([SignalAction.BUY] + [SignalAction.HOLD] * 10)
         trades = run_exit_backtest(df, strategy, _make_risk_manager(), _base_config())
         assert trades[0].regime is None
+
+
+class TestHigherTimeframeData:
+    """다중 시간봉 확인 필터 리서치용: higher_tf_df가 주어지면 각 봉 시점까지의
+    상위 시간봉 슬라이스를 전략에 전달해야 한다. 안 주어지면(기존 모든
+    테스트) 기존 호출부와 완전히 동일해야 한다(회귀 없음)."""
+
+    def test_higher_tf_df_none_means_strategy_receives_none(self) -> None:
+        rows = [_row(_base_time(i), 100, 100, 100, 100) for i in range(WINDOW)]
+        rows.append(_row(_base_time(WINDOW), 95, 95, 88, 90))
+        df = pd.DataFrame(rows)
+        strategy = _ScriptedStrategy([SignalAction.BUY] + [SignalAction.HOLD] * 10)
+        run_exit_backtest(df, strategy, _make_risk_manager(), _base_config())
+        assert all(v is None for v in strategy.received_higher_tf_data)
+
+    def test_higher_tf_df_sliced_up_to_current_bar_timestamp(self) -> None:
+        rows = [_row(_base_time(i), 100, 100, 100, 100) for i in range(WINDOW)]
+        rows.append(_row(_base_time(WINDOW), 95, 95, 88, 90))
+        df = pd.DataFrame(rows)
+
+        # 1시간봉 더미: 15분봉보다 훨씬 성긴 타임스탬프. 진입 시점(WINDOW-1 인덱스,
+        # 즉 첫 generate_signal 호출) 이후의 htf 봉은 슬라이스에 포함되면 안 된다.
+        htf_rows = [
+            _row(_base_time(i * 4), 100, 100, 100, 100) for i in range(WINDOW + 5)
+        ]
+        htf_df = pd.DataFrame(htf_rows)
+
+        strategy = _ScriptedStrategy([SignalAction.BUY] + [SignalAction.HOLD] * 10)
+        run_exit_backtest(
+            df, strategy, _make_risk_manager(), _base_config(), higher_tf_df=htf_df,
+        )
+
+        first_call_htf = strategy.received_higher_tf_data[0]
+        assert first_call_htf is not None
+        # 첫 호출 시점의 15분봉 타임스탬프(= df.iloc[WINDOW-1].timestamp)보다
+        # 미래인 htf 봉은 하나도 섞여 들어오면 안 된다.
+        entry_ts = df.iloc[WINDOW - 1]["timestamp"]
+        assert (first_call_htf["timestamp"] <= entry_ts).all()
