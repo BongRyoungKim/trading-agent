@@ -313,14 +313,14 @@ class TestWatchdog:
     def test_shutdown_disables_watchdog_no_respawn(self, monkeypatch):
         """의도적인 shutdown()은 watchdog까지 같이 멈춰야 한다(되살아나면 안 됨)."""
         created: list[HTTPServer] = []
-        real_ctor = health_module.HTTPServer
+        real_ctor = health_module.ThreadingHTTPServer
 
         def tracking_ctor(*args, **kwargs):
             srv = real_ctor(*args, **kwargs)
             created.append(srv)
             return srv
 
-        monkeypatch.setattr(health_module, "HTTPServer", tracking_ctor)
+        monkeypatch.setattr(health_module, "ThreadingHTTPServer", tracking_ctor)
 
         port = _free_port()
         server = start_health_server(host="127.0.0.1", port=port, watchdog_interval=0.05)
@@ -338,7 +338,7 @@ class TestWatchdog:
         예외를 던지도록 만들어 "서빙 스레드가 죽는" 상황을 결정적으로 재현한다.
         """
         created: list[HTTPServer] = []
-        real_ctor = health_module.HTTPServer
+        real_ctor = health_module.ThreadingHTTPServer
 
         def tracking_ctor(*args, **kwargs):
             srv = real_ctor(*args, **kwargs)
@@ -349,7 +349,7 @@ class TestWatchdog:
                 srv.serve_forever = _boom  # type: ignore[method-assign]
             return srv
 
-        monkeypatch.setattr(health_module, "HTTPServer", tracking_ctor)
+        monkeypatch.setattr(health_module, "ThreadingHTTPServer", tracking_ctor)
 
         port = _free_port()
         server = start_health_server(host="127.0.0.1", port=port, watchdog_interval=0.05)
@@ -371,3 +371,60 @@ class TestWatchdog:
                     srv.shutdown()
                 except Exception:  # noqa: BLE001
                     pass
+
+
+class TestConcurrentRequests:
+    """
+    실운영 사고 재현: 단일 스레드 HTTPServer는 요청 하나가 응답을 못 보내고
+    멈추면(예: 상대가 응답을 안 읽어 wfile.write가 블록) 그 뒤의 모든 요청이
+    영원히 막힌다 — 게다가 서빙 스레드 자체는 죽지 않고 "살아있는 채로 멈춘"
+    상태라 watchdog의 thread.is_alive() 체크로는 감지가 안 된다. 동시 처리
+    (ThreadingHTTPServer)가 이 문제를 원천적으로 없앤다.
+    """
+
+    def test_slow_request_does_not_block_concurrent_health_check(self, monkeypatch):
+        release = threading.Event()
+        first_call_started = threading.Event()
+        original_do_get = health_module._HealthHandler._do_GET
+
+        def patched_do_get(self):
+            if self.path == "/slow":
+                first_call_started.set()
+                release.wait(timeout=3)
+                body = b'{"status": "slow-done"}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            original_do_get(self)
+
+        monkeypatch.setattr(health_module._HealthHandler, "_do_GET", patched_do_get)
+
+        port = _free_port()
+        server = start_health_server(host="127.0.0.1", port=port, watchdog_interval=0)
+        try:
+            result: dict = {}
+
+            def call_slow():
+                result["slow"] = _get(port, "/slow")
+
+            t = threading.Thread(target=call_slow)
+            t.start()
+            assert first_call_started.wait(timeout=2), "느린 요청이 시작되지 않음"
+
+            # 느린 요청이 아직 응답을 못 보낸 상태에서 /health를 호출 —
+            # 단일 스레드였다면 여기서 최대 3초(release 타임아웃)까지 블록된다.
+            start = time.monotonic()
+            code, body = _get(port, "/health")
+            elapsed = time.monotonic() - start
+
+            assert code == 200
+            assert body["status"] == "ok"
+            assert elapsed < 1.0, f"/health이 느린 요청에 막혔음 (elapsed={elapsed:.2f}s)"
+
+            release.set()
+            t.join(timeout=2)
+        finally:
+            server.shutdown()

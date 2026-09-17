@@ -35,13 +35,22 @@ Intended usage::
 죽은 게 감지되면 소켓을 정리하고 즉시 재기동한다. 원인 규명이 안 된
 문제에 대한 임시방편이 아니라, "단일 백그라운드 스레드가 죽으면
 전체 헬스체크가 무한정 죽는다"는 구조적 취약점 자체를 없애는 것이 목적이다.
+
+2026-09-17 추가: watchdog은 스레드가 "죽은" 경우만 감지한다 — 실제로는
+스레드가 죽지 않고 요청 하나에 "멈춘"(예: 상대가 응답을 안 읽어 쓰기가
+블록) 사고가 발생했고, 이 경우 `thread.is_alive()`는 계속 True라 watchdog이
+전혀 개입하지 못했다(단일 스레드라 그 하나의 멈춘 요청이 이후 모든 요청을
+막음). `HTTPServer` → `ThreadingHTTPServer`로 교체해 요청마다 별도 스레드를
+쓰게 함으로써, 하나가 멈춰도 나머지 요청은 그대로 처리되게 해 이 문제
+자체를 구조적으로 없앴다(watchdog은 진짜 스레드 사망 시나리오에 대한
+방어로 그대로 유지).
 """
 from __future__ import annotations
 
 import json
 import threading
 from datetime import UTC, datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 from loguru import logger
 
@@ -248,7 +257,7 @@ def start_health_server(
     state: dict[str, object] = {}
 
     def spawn() -> None:
-        server = HTTPServer((host, port), _HealthHandler)
+        server = ThreadingHTTPServer((host, port), _HealthHandler)
         original_shutdown = server.shutdown
 
         def _shutdown_and_stop_watchdog() -> None:
