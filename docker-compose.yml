@@ -30,6 +30,15 @@ services:
   breakout-scanner:
     build: .
     env_file: .env
+    # trading-agent와 로그 볼륨(./logs)을 공유하는데, 둘 다 기본 LOG_FILE_PATH
+    # (logs/trading_agent.log)를 그대로 쓰면 서로 다른 프로세스가 같은 파일을
+    # 각자 알아서 로테이션하다가 한쪽이 파일을 교체하는 순간 다른 쪽이 들고
+    # 있던 fd가 교체 전(곧 사라질) inode에 계속 써서 그 내용이 통째로 유실되는
+    # 사고가 실제로 발생했다(2026-09-18, trading-agent의 틱 로그가 파일에는
+    # 전혀 안 남고 stdout에만 남아있던 게 발견됨). 서비스별로 파일을 분리해
+    # 아예 경합 자체를 없앤다.
+    environment:
+      - LOG_FILE_PATH=logs/breakout_scanner.log
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped
@@ -44,6 +53,9 @@ services:
   backtest:
     build: .
     env_file: .env
+    # 같은 로그 파일 경합 문제(breakout-scanner 쪽 주석 참고) 방지용 분리.
+    environment:
+      - LOG_FILE_PATH=logs/backtest.log
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
