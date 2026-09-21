@@ -92,3 +92,42 @@ class TestFetchAndCacheOhlcvSkipsNetworkWhenCached:
             "BTC/KRW", datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 2, tzinfo=UTC),
         )
         assert len(df) == 1
+
+
+class TestFetchAndCacheOhlcvFailsFastOnPersistentError:
+    """
+    실제 사고 재현(2026-09-19~21): 상장폐지/오타 등으로 ccxt.fetch_ohlcv가
+    영구적으로 실패하는 심볼을 만나면, 기존 코드는 매 실패마다 2초씩 자며
+    무한 재시도했다 — 스크립트가 CPU는 거의 안 쓰면서 며칠씩 아무 진행 없이
+    멈춰있는 형태로 나타나 발견이 늦어졌다. 일정 횟수 이상 연속 실패하면
+    예외를 그대로 전파하고 멈춰야 한다.
+    """
+
+    def test_raises_after_bounded_retries_instead_of_looping_forever(
+        self, monkeypatch
+    ) -> None:
+        import ccxt
+
+        call_count = {"n": 0}
+
+        class _FakeExchange:
+            enableRateLimit = False
+
+            def fetch_ohlcv(self, *args, **kwargs):
+                call_count["n"] += 1
+                raise ccxt.BadSymbol("upbit does not have market symbol FAKE/KRW")
+
+        monkeypatch.setattr(ccxt, "upbit", lambda: _FakeExchange(), raising=False)
+        monkeypatch.setattr(data_cache._time, "sleep", lambda *_: None)
+
+        from datetime import UTC, datetime
+
+        with pytest.raises(ccxt.BadSymbol):
+            data_cache.fetch_and_cache_ohlcv(
+                "FAKE/KRW", datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 2, tzinfo=UTC),
+            )
+
+        assert call_count["n"] <= 10, (
+            f"기존 버그라면 여기서 무한 루프에 빠져 이 assert에 도달하지 못한다 "
+            f"(call_count={call_count['n']})"
+        )

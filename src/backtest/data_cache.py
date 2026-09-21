@@ -13,12 +13,21 @@ train/validation/test split used by strategy research.
 from __future__ import annotations
 
 import json
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
 CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "backtest_cache"
+
+# fetch_and_cache_ohlcv()'s pagination loop retries on any exchange error
+# (rate limits/transient network hiccups are the common case) — but a
+# permanent error (delisted/typo'd symbol, auth failure) looks identical to
+# the loop, and a real incident (2026-09-19~21) had a bad symbol silently
+# spin here for two days at near-zero CPU before anyone noticed. Cap
+# consecutive failures so a permanent error surfaces immediately instead.
+_MAX_CONSECUTIVE_FETCH_FAILURES = 5
 
 
 def cache_path(symbol: str, timeframe: str) -> Path:
@@ -77,8 +86,6 @@ def fetch_and_cache_ohlcv(
     if not force and is_cached(symbol, timeframe):
         return load_cached_ohlcv(symbol, timeframe)
 
-    import time as _time
-
     import ccxt
 
     exchange = getattr(ccxt, exchange_id)()
@@ -87,13 +94,18 @@ def fetch_and_cache_ohlcv(
     all_rows: list[list] = []
     cursor = end
     seen_min_ts: int | None = None
+    consecutive_failures = 0
     while True:
         to_str = cursor.strftime("%Y-%m-%dT%H:%M:%S")
         try:
             batch = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=200, params={"to": to_str})
         except Exception:  # noqa: BLE001 — rate limit / transient network errors
+            consecutive_failures += 1
+            if consecutive_failures >= _MAX_CONSECUTIVE_FETCH_FAILURES:
+                raise
             _time.sleep(2)
             continue
+        consecutive_failures = 0
         if not batch:
             break
         all_rows.extend(batch)
