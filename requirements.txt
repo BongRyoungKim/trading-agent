@@ -23,6 +23,9 @@ apscheduler>=3.10.4
 # News RSS parsing (daily news-sentiment auto-tuning)
 feedparser>=6.0.10
 
+# On-chain data (CoinMetrics Community API — BTC exchange netflow signal)
+requests>=2.31.0
+
 # Visualization (optional — only needed for BacktestVisualizer)
 matplotlib>=3.8.0
 
