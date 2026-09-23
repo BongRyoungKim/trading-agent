@@ -10,6 +10,11 @@
 "페이퍼 모드 우선(협상 불가)" 원칙, CLAUDE.md 하드게이트에 따름.
 백테스트(전체 n=134, PF=1.509, Sharpe=2.611, outlier 점검 통과)가
 아무리 좋아도 실거래 전환은 페이퍼 관찰 후 별도 결정.
+
+청산 로직은 2026-09-23 재검증(1h/4h를 2017-10-01까지 확장 수집 후
+train/validation/holdout 3구간 전부에서 트레일링 스탑이 원안 ATR손절보다
+우수함을 확인)에 따라 트레일링 스탑(초기손절5%+신고가대비15%)으로
+교체됨 — src/confluence/exits.py 참고.
 """
 from __future__ import annotations
 
@@ -42,9 +47,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--position-size-krw", type=float, default=100_000.0)
     parser.add_argument("--breakout-window", type=int, default=8)
     parser.add_argument("--vol-mult", type=float, default=1.5)
-    parser.add_argument("--atr-multiplier", type=float, default=2.0)
-    parser.add_argument("--sl-ceiling-pct", type=float, default=1.0)
-    parser.add_argument("--sl-floor-pct", type=float, default=3.0)
+    parser.add_argument("--initial-stop-pct", type=float, default=5.0)
+    parser.add_argument("--trailing-stop-pct", type=float, default=15.0)
     parser.add_argument("--max-hold-hours", type=int, default=20)
     return parser
 
@@ -66,9 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     portfolio = PortfolioTracker(initial_cash=Decimal(str(args.initial_capital_krw)))
 
     exit_cfg = ConfluenceExitConfig(
-        atr_multiplier=args.atr_multiplier,
-        sl_ceiling_pct=args.sl_ceiling_pct,
-        sl_floor_pct=args.sl_floor_pct,
+        initial_stop_pct=args.initial_stop_pct,
+        trailing_stop_pct=args.trailing_stop_pct,
         max_hold_hours=args.max_hold_hours,
     )
     scanner_cfg = ConfluenceScannerConfig(

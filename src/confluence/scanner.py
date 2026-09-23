@@ -18,9 +18,8 @@ from typing import TYPE_CHECKING
 import pandas as pd
 from loguru import logger
 
-from src.confluence.exits import ConfluenceExitConfig, ConfluencePosition, check_exit
+from src.confluence.exits import ConfluenceExitConfig, ConfluencePosition, check_exit, update_trailing
 from src.confluence.htf_regime import is_uptrend
-from src.utils.indicators import atr as calc_atr
 
 if TYPE_CHECKING:
     from src.exchange.upbit import UpbitClient
@@ -33,7 +32,6 @@ class ConfluenceScannerConfig:
     position_size_krw: Decimal = Decimal("100000")   # 페이퍼 계좌 — 실제 자금 아님
     breakout_window: int = 8       # 1시간봉x8=8시간 신고종가
     vol_mult: float = 1.5
-    atr_period: int = 14
 
 
 def _to_df(bars) -> pd.DataFrame:
@@ -82,6 +80,18 @@ class ConfluenceScanner:
         signal = check_exit(self._position, ticker.last, self._latest_confluence_ok, cfg=self._exit_cfg)
         if signal is not None:
             self._close_position(signal.exit_price, signal.reason)
+            return
+
+        updated = update_trailing(self._position, ticker.last, cfg=self._exit_cfg)
+        if updated.stop_loss != self._position.stop_loss:
+            self._sync_stop_loss(symbol, updated.stop_loss)
+        self._position = updated
+
+    def _sync_stop_loss(self, symbol: str, new_stop: Decimal) -> None:
+        try:
+            self._portfolio.update_stop_loss(symbol, new_stop)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Confluence: stop-loss sync failed", symbol=symbol, error=str(exc))
 
     def _close_position(self, exit_price: Decimal, reason: str) -> None:
         symbol = self._scanner_cfg.symbol
@@ -135,13 +145,13 @@ class ConfluenceScanner:
 
         try:
             h1_bars = self._exchange.get_ohlcv(
-                symbol, "1h", limit=self._scanner_cfg.breakout_window + self._scanner_cfg.atr_period + 5,
+                symbol, "1h", limit=self._scanner_cfg.breakout_window + 25,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Confluence: 1h OHLCV fetch failed, entry skipped", error=str(exc))
             return
         df1h = _to_df(h1_bars)
-        if len(df1h) < self._scanner_cfg.breakout_window + self._scanner_cfg.atr_period + 1:
+        if len(df1h) < self._scanner_cfg.breakout_window + 21:
             return
 
         breakout_level = df1h["close"].iloc[-self._scanner_cfg.breakout_window - 1:-1].max()
@@ -151,16 +161,10 @@ class ConfluenceScanner:
         vol_ok = vol_avg > 0 and current["volume"] >= self._scanner_cfg.vol_mult * vol_avg
 
         if is_breakout and vol_ok:
-            self._open_position(df1h)
+            self._open_position()
 
-    def _open_position(self, df1h: pd.DataFrame) -> None:
+    def _open_position(self) -> None:
         symbol = self._scanner_cfg.symbol
-        atr_series = calc_atr(df1h["high"], df1h["low"], df1h["close"], self._scanner_cfg.atr_period)
-        atr_value = atr_series.iloc[-1]
-        if pd.isna(atr_value):
-            logger.warning("Confluence: skipping entry — ATR unavailable", symbol=symbol)
-            return
-
         try:
             ticker = self._exchange.get_ticker(symbol)
         except Exception as exc:  # noqa: BLE001
@@ -178,8 +182,7 @@ class ConfluenceScanner:
             return
 
         self._position = ConfluencePosition.open_new(
-            symbol=symbol, entry_price=entry_price, amount=amount,
-            atr_value=float(atr_value), cfg=self._exit_cfg,
+            symbol=symbol, entry_price=entry_price, amount=amount, cfg=self._exit_cfg,
         )
         logger.info(
             "Confluence position opened (PAPER)",

@@ -132,6 +132,28 @@ class TestCheckExits:
         assert not portfolio.has_position("BTC/KRW")
         telegram.send_position_closed.assert_called()
 
+    def test_ratchets_trailing_stop_on_new_high_and_syncs_portfolio(self) -> None:
+        scanner, exchange, telegram, portfolio = _make_scanner()
+
+        def get_ohlcv(symbol, timeframe, limit):
+            if timeframe in ("1d", "4h"):
+                return _uptrend_bars(60)
+            bars = _flat_bars(30, price=100_000_000)
+            bars.append(_bar(105_000_000, volume=100.0))
+            return bars
+
+        exchange.get_ohlcv.side_effect = get_ohlcv
+        exchange.get_ticker.return_value = _ticker(105_000_000)
+        scanner.refresh_signal_and_scan()
+        initial_stop = scanner._position.stop_loss
+
+        exchange.get_ticker.return_value = _ticker(120_000_000)  # 신고가 갱신
+        scanner.check_exits()
+
+        assert scanner.has_position
+        assert scanner._position.stop_loss > initial_stop
+        assert portfolio.get_position("BTC/KRW").stop_loss == scanner._position.stop_loss
+
     def test_closes_on_htf_trend_break(self) -> None:
         scanner, exchange, telegram, portfolio = _make_scanner()
 
