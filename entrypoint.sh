@@ -26,5 +26,4 @@ exec python -m src.main \
   --trailing-stop-pct 2.0 \
   --heartbeat-interval 1800 \
   --exclude-symbols DOGE/KRW ELSA/KRW DOOD/KRW RE/KRW KAITO/KRW USDT/KRW \
-  --news-tuning-hour 8 \
   --skip-checks

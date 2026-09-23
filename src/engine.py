@@ -465,8 +465,6 @@ class TradingEngine:
         weekly_report_hour: int = 9,
         top_n_symbols: int = 20,
         max_symbol_volatility_pct: float = 20.0,
-        news_tuning_hour: int | None = None,
-        news_tuning_dry_run: bool = True,
     ) -> None:
         """
         Start the scheduler and block until stop() is called or a termination
@@ -491,20 +489,12 @@ class TradingEngine:
                                  제외한다. 펌프/덤프성 급등락 종목이 거래대금만
                                  크다는 이유로 뽑혀 손절 슬리피지 사고를 내는 걸
                                  막기 위함. 0 이하로 주면 필터를 끈다.
-            news_tuning_hour:   KST hour (0-23) to run the daily news-sentiment
-                                 auto-tuner. None (default) disables it entirely —
-                                 opt-in only.
-            news_tuning_dry_run: If True (default), the news tuner only computes
-                                 and reports what it would change without applying
-                                 it. Set False once you've watched it run for a
-                                 while and trust the adjustments.
         """
         self._initial_capital = self._portfolio.cash
         self._start_time = time.monotonic()
         self._tick_interval = interval_seconds
         self._top_n_symbols = top_n_symbols if top_n_symbols > 0 else 20
         self._max_symbol_volatility_pct = max_symbol_volatility_pct
-        self._news_tuning_dry_run = news_tuning_dry_run
         self._tick_symbols = set(symbols)
         if pin_symbols:
             self._pinned_symbols = frozenset(symbols)
@@ -599,29 +589,6 @@ class TradingEngine:
             )
             logger.info(
                 "Weekly report scheduled", day=weekly_report_day, hour=weekly_report_hour
-            )
-
-        if news_tuning_hour is not None:
-            self._scheduler.add_job(
-                self._run_news_tuning,
-                trigger="cron",
-                hour=news_tuning_hour,
-                minute=0,
-                # APScheduler BackgroundScheduler의 기본 misfire_grace_time은
-                # 1초다 — 1일 1회 cron job에는 지나치게 빡빡하다. 단일 vCPU
-                # 프리티어 VM에서 다른 심볼 tick job들의 동기 네트워크 I/O로
-                # 정시 체크가 1초만 넘겨도 그날 실행이 (로그 한 줄 없이)
-                # 조용히 스킵되는 장애가 실제로 있었다(2026-09-08~09-10,
-                # 두 차례의 08:00 KST 실행 기회가 전부 무응답). 3600초(1시간)
-                # 여유를 둬서 짧은 지연으로 하루치 실행 자체가 통째로
-                # 사라지는 일을 막는다.
-                misfire_grace_time=3600,
-                id="news_tuning",
-            )
-            logger.info(
-                "Daily news-sentiment tuning scheduled",
-                hour=news_tuning_hour,
-                dry_run=news_tuning_dry_run,
             )
 
         if self._market_hours.enabled and self._telegram.is_enabled:
@@ -1333,25 +1300,6 @@ class TradingEngine:
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to send daily Telegram report", error=str(exc))
-
-    # ── Internal: daily news-sentiment tuning ─────────────────────────────────
-
-    def _run_news_tuning(self) -> None:
-        """
-        Scheduled job (1일 1회): RSS 뉴스 헤드라인의 강세/약세 키워드 빈도로
-        감성 점수를 내고, ScheduledTaskRunner(거래 건수 기준)와 별개로
-        Vol/RSI 진입 문턱을 조정한다. dry_run=True(기본값)면 실제로 반영하지
-        않고 텔레그램으로 시뮬레이션 결과만 보낸다.
-        """
-        try:
-            from src.report.news_tuner import run_daily_news_tuning  # noqa: PLC0415
-
-            result = run_daily_news_tuning(dry_run=self._news_tuning_dry_run)
-            logger.info("News tuning result", status=result.status, detail=result.detail)
-            if self._telegram.is_enabled:
-                self._telegram.send(result.to_telegram())
-        except Exception as exc:  # noqa: BLE001
-            logger.error("News tuning job failed", error=str(exc))
 
     # ── Internal: auto-tuning restart watch ──────────────────────────────────
 

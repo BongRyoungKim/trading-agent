@@ -125,7 +125,6 @@ docker compose restart trading-agent
 | 하트비트 | 1800초 (30분) |
 | 대시보드 포트 | **8081** (헬스체크는 별도로 8080) |
 | 블랙리스트 심볼 | DOGE/KRW, ELSA/KRW, DOOD/KRW, RE/KRW, KAITO/KRW, USDT/KRW |
-| 뉴스 감성 자동 튜닝 | 매일 KST 8시 (`--news-tuning-hour 8`, dry-run — `--news-tuning-apply` 없음) |
 | 프리플라이트 체크 | **`--skip-checks`로 생략됨** (아래 참고) |
 | 모드 | 저장소 루트 `.trading_mode` 파일 값 |
 
@@ -415,12 +414,6 @@ reports/2026-09-08.md
 
 조정 결과는 저장소 루트 `.strategy_params.json`에 반영되며, **이 파일은 git으로 관리되지
 않는 서버 로컬 상태**다 (이전 값은 `.strategy_params.json.bak-YYYYMMDD-HHMMSS` 형식으로 백업됨).
-
-### 뉴스 감성 자동 튜닝 (`src/report/news_tuner.py`)
-
-현재 서버는 매일 KST 8시(`--news-tuning-hour 8`)에 뉴스 RSS 감성을 분석해 파라미터 조정을
-제안한다. `--news-tuning-apply`가 붙어 있지 않으므로 **dry-run** — 제안만 로그에 남고 실제
-적용되지는 않는다.
 
 ### 트레이드 기록 조회 (`src/status_cli.py`)
 
