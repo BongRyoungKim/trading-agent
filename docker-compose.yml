@@ -23,32 +23,6 @@ services:
       start_period: 10s
       retries: 3
 
-  # 브레이크아웃 조기진입 페이퍼 스캐너 — trading-agent와 완전히 독립된 프로세스.
-  # 라이브 자본에 손대지 않고(PAPER 전용), 이 서비스만 따로 재시작/재배포해도
-  # trading-agent 서비스는 전혀 영향받지 않는다.
-  #   docker compose up -d --build breakout-scanner
-  breakout-scanner:
-    build: .
-    env_file: .env
-    # trading-agent와 로그 볼륨(./logs)을 공유하는데, 둘 다 기본 LOG_FILE_PATH
-    # (logs/trading_agent.log)를 그대로 쓰면 서로 다른 프로세스가 같은 파일을
-    # 각자 알아서 로테이션하다가 한쪽이 파일을 교체하는 순간 다른 쪽이 들고
-    # 있던 fd가 교체 전(곧 사라질) inode에 계속 써서 그 내용이 통째로 유실되는
-    # 사고가 실제로 발생했다(2026-09-18, trading-agent의 틱 로그가 파일에는
-    # 전혀 안 남고 stdout에만 남아있던 게 발견됨). 서비스별로 파일을 분리해
-    # 아예 경합 자체를 없앤다.
-    environment:
-      - LOG_FILE_PATH=logs/breakout_scanner.log
-    volumes:
-      - ./logs:/app/logs
-    restart: unless-stopped
-    # Dockerfile의 HEALTHCHECK는 :8080/health를 찌르지만 이 서비스는 대시보드/
-    # 헬스서버를 띄우지 않는 순수 스캐너라 항상 실패로 뜬다 — 오탐이므로 끔.
-    healthcheck:
-      disable: true
-    entrypoint: ["python", "-m", "src.breakout.runner"]
-    command: []
-
   # BTC 온체인(거래소 넷플로우) 페이퍼 스캐너 — trading-agent와 완전히 독립.
   # 2026-09-22 리서치(CoinMetrics 무료 API, 전체 2017-2026 n=161 PF=1.247
   # Sharpe=2.102)에서 나온 유일한 비기각 신호를 페이퍼로 먼저 검증한다.
@@ -57,7 +31,13 @@ services:
   onchain-btc:
     build: .
     env_file: .env
-    # 로그 파일 경합 문제(breakout-scanner 쪽 주석 참고) 방지용 분리.
+    # 각 서비스가 로그 볼륨(./logs)을 공유하는데, 전부 기본 LOG_FILE_PATH
+    # (logs/trading_agent.log)를 그대로 쓰면 서로 다른 프로세스가 같은 파일을
+    # 각자 알아서 로테이션하다가 한쪽이 파일을 교체하는 순간 다른 쪽이 들고
+    # 있던 fd가 교체 전(곧 사라질) inode에 계속 써서 그 내용이 통째로 유실되는
+    # 사고가 실제로 발생했다(2026-09-18, trading-agent의 틱 로그가 파일에는
+    # 전혀 안 남고 stdout에만 남아있던 게 발견됨). 서비스별로 파일을 분리해
+    # 아예 경합 자체를 없앤다(아래 다른 서비스들도 동일 이유).
     environment:
       - LOG_FILE_PATH=logs/onchain_btc.log
     volumes:
@@ -77,7 +57,7 @@ services:
   confluence-btc:
     build: .
     env_file: .env
-    # 로그 파일 경합 문제(breakout-scanner 쪽 주석 참고) 방지용 분리.
+    # 로그 파일 경합 문제(onchain-btc 쪽 주석 참고) 방지용 분리.
     environment:
       - LOG_FILE_PATH=logs/confluence_btc.log
     volumes:
@@ -92,7 +72,7 @@ services:
   backtest:
     build: .
     env_file: .env
-    # 같은 로그 파일 경합 문제(breakout-scanner 쪽 주석 참고) 방지용 분리.
+    # 같은 로그 파일 경합 문제(onchain-btc 쪽 주석 참고) 방지용 분리.
     environment:
       - LOG_FILE_PATH=logs/backtest.log
     volumes:

@@ -16,7 +16,7 @@
 | OS | Ubuntu |
 | 공인 IP | `129.225.163.29` |
 | 접속 | `ssh -i ./ssh-key-2026-08-25.key ubuntu@129.225.163.29` |
-| 실행 방식 | **Docker Compose** (`~/trading-agent/docker-compose.yml`, 컨테이너 2개: `trading-agent`, `breakout-scanner`) |
+| 실행 방식 | **Docker Compose** (`~/trading-agent/docker-compose.yml`, 여러 서비스 — `docker compose ps`로 목록 확인) |
 | 거래 모드 | `.trading_mode` 파일 (확인 시점 `live`) |
 | 전략 | `RegimeAdaptiveStrategy` (`entrypoint.sh`에 고정) |
 | 대시보드 | `http://129.225.163.29:8081/` (외부 접속 확인됨, 200 OK) |
@@ -110,7 +110,7 @@ scp -i ./ssh-key-2026-08-25.key ubuntu@129.225.163.29:~/trading-agent/data/posit
 ```bash
 cd ~/trading-agent
 docker compose down
-docker ps -a   # trading-agent, breakout-scanner 컨테이너가 사라졌는지 확인
+docker ps -a   # 모든 컨테이너가 사라졌는지 확인
 ```
 
 ---
@@ -254,7 +254,7 @@ echo -n "paper" > ~/trading-agent/.trading_mode
 cd ~/trading-agent
 docker compose up -d --build
 docker compose ps
-# trading-agent, breakout-scanner 두 컨테이너가 "Up (healthy)" 상태여야 한다
+# trading-agent가 "Up (healthy)" 상태여야 한다
 ```
 
 ### 6-2. 로그 확인
