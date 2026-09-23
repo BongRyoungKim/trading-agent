@@ -68,6 +68,26 @@ services:
     entrypoint: ["python", "-m", "src.onchain.runner"]
     command: []
 
+  # 1d+4h+1h 컨플루언스 BTC 페이퍼 스캐너 — trading-agent와 완전히 독립.
+  # 2026-09-23 리서치(전체 n=134, PF=1.509, Sharpe=2.611, outlier 점검
+  # 통과, 3구간 방향 일치)에서 나온 2번째 비기각 신호를 페이퍼로 먼저
+  # 검증한다. PAPER 전용 — CLAUDE.md 하드게이트(실매매 전 페이퍼 검증
+  # 필수)에 따름.
+  #   docker compose up -d --build confluence-btc
+  confluence-btc:
+    build: .
+    env_file: .env
+    # 로그 파일 경합 문제(breakout-scanner 쪽 주석 참고) 방지용 분리.
+    environment:
+      - LOG_FILE_PATH=logs/confluence_btc.log
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    entrypoint: ["python", "-m", "src.confluence.runner"]
+    command: []
+
   # Run a one-shot backtest and exit
   backtest:
     build: .
