@@ -90,5 +90,9 @@ services:
       - ./logs:/app/logs
       - ./reports:/app/reports
       - ./.strategy_params.json:/app/.strategy_params.json:ro
+      # scripts/ 는 이미지에 COPY되지 않고(Dockerfile은 src/ 만 굽는다)
+      # trading-agent 서비스처럼 런타임 마운트로 제공된다 — auto_validate_cron.sh
+      # 가 --entrypoint python 으로 scripts/validate_params.py 를 실행하려면 필요.
+      - ./scripts:/app/scripts:ro
     profiles: ["backtest"]
     entrypoint: ["python", "-m", "src.backtest_cli"]
