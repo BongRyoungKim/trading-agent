@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     # ── Notifications (optional) ──────────────────────────────────────────────
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # PAPER 스캐너(onchain-btc, confluence-btc) 전용 채팅방 — 실거래 알림과
+    # 섞이지 않도록 분리. 비어있으면 telegram_chat_id로 폴백(기존 동작 유지).
+    telegram_paper_chat_id: str = ""
     # "all" = every notification; "critical" = only risk alerts/errors (info suppressed)
     telegram_notify_level: Literal["all", "critical"] = "all"
     # "HH:MM-HH:MM" in UTC, wraparound supported (e.g. "22:00-07:00"). "" disables.

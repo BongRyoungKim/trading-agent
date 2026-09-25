@@ -120,6 +120,17 @@ class TestNotificationSettings:
         settings = Settings()
         assert settings.telegram_quiet_hours_utc == "22:00-07:00"
 
+    def test_default_paper_chat_id_is_empty(self, mock_env: None) -> None:
+        settings = get_settings()
+        assert settings.telegram_paper_chat_id == ""
+
+    def test_paper_chat_id_custom_value_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TELEGRAM_PAPER_CHAT_ID", "-100123456789")
+        settings = Settings()
+        assert settings.telegram_paper_chat_id == "-100123456789"
+
 
 class TestSingleton:
     def test_get_settings_returns_same_instance(self, mock_env: None) -> None:

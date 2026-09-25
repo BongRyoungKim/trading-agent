@@ -64,7 +64,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     telegram = TelegramClient(
         bot_token=settings.telegram_bot_token,
-        chat_id=settings.telegram_chat_id,
+        # 페이퍼 전용 채팅방이 설정돼 있으면 그쪽으로, 없으면 기존 메인
+        # 채팅방으로 폴백(설정 전 기존 배포와 동일 동작 유지).
+        chat_id=settings.telegram_paper_chat_id or settings.telegram_chat_id,
         hourly_summary=False,
     )
     portfolio = PortfolioTracker(initial_cash=Decimal(str(args.initial_capital_krw)))
