@@ -30,6 +30,7 @@ ENV/
 # Data & logs (root-level runtime dirs only — do NOT match src/data/, tests/data/, etc.)
 /data/
 /logs/
+/cron_logs/
 !/data/.gitkeep
 !/logs/.gitkeep
 *.csv

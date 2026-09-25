@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # Host crontab entry (runs on the VM itself, NOT inside any container):
-#   */10 * * * * /home/ubuntu/trading-agent/scripts/auto_validate_cron.sh >> /home/ubuntu/trading-agent/logs/auto_validate_cron.log 2>&1
+#   */15 * * * * /home/ubuntu/trading-agent/scripts/auto_validate_cron.sh >> /home/ubuntu/trading-agent/cron_logs/auto_validate_cron.log 2>&1
+#
+# The log redirect target MUST be under cron_logs/, not logs/ — logs/ is
+# owned by uid 1000 (the container's `trader` user / host `opc`, mode 755),
+# so the `ubuntu` host account cron runs as (uid 1001) cannot write there;
+# bash fails to open the >> target before the script even starts, so cron
+# silently never runs it at all (discovered 2026-09-26 — a full day of
+# scheduled ticks produced zero log output and the pending proposal never
+# got validated). cron_logs/ is a plain directory `ubuntu` creates and owns
+# itself, outside any container-managed path.
 #
 # Auto-validates a staged live-parameter proposal
 # (reports/pending_param_change.json) so nobody needs to SSH in and run
