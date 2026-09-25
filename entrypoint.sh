@@ -24,6 +24,6 @@ exec python -m src.main \
   --symbols BTC/KRW \
   --top-symbols 12 \
   --trailing-stop-pct 2.0 \
-  --heartbeat-interval 1800 \
+  --heartbeat-interval 10800 \
   --exclude-symbols DOGE/KRW ELSA/KRW DOOD/KRW RE/KRW KAITO/KRW USDT/KRW \
   --skip-checks
