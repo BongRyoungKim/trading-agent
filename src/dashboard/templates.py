@@ -1305,7 +1305,10 @@ function renderPendingParams(p) {{
 
   if (!p.validation) {{
     el.innerHTML = `<h2>⚙️ 자동튜너 제안 — 검증 대기</h2>${{rows}}
-      <p style="color:var(--signal-warn);font-size:var(--fs-4);margin-top:.5rem">⏳ 백테스트 검증 대기 중</p>`;
+      <p style="color:var(--signal-warn);font-size:var(--fs-4);margin-top:.5rem">⏳ 백테스트 검증 대기 중</p>
+      <div style="margin-top:.75rem">
+        <button class="btn-pause" onclick="paramAction('reject',this)" style="padding:.5rem;border-radius:.4rem;width:100%">✖ 제안 삭제</button>
+      </div>`;
     return;
   }}
   const v = p.validation;
