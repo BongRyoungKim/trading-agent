@@ -133,7 +133,11 @@ class TelegramBotController:
 
         # Strip @BotName suffix (e.g. /status@MyTradingBot → /status)
         cmd = text.split()[0].split("@")[0].lower()
-        logger.info("Telegram command received", command=cmd)
+        chat = message.get("chat", {})
+        logger.info(
+            "Telegram command received", command=cmd,
+            chat_id=chat.get("id"), chat_type=chat.get("type"), chat_title=chat.get("title"),
+        )
 
         reply = self._dispatch_command(cmd)
         self._telegram.send(reply)
