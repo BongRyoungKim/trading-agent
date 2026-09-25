@@ -215,6 +215,58 @@ class TestValidationResult:
         assert lp.load_validation_result() is None
 
 
+class TestPendingFingerprint:
+    def test_none_when_no_pending(self):
+        assert lp.pending_fingerprint() is None
+
+    def test_stable_across_reload_of_same_content(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        first = lp.pending_fingerprint()
+        second = lp.pending_fingerprint()
+        assert first == second
+
+    def test_changes_when_a_new_param_is_staged(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        before = lp.pending_fingerprint()
+        lp.propose_pending("sl_floor_pct", 3.5, trigger="t", reason="r")
+        after = lp.pending_fingerprint()
+        assert before != after
+
+    def test_ignores_trigger_and_reason_metadata(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="wr_alert", reason="first reason")
+        first = lp.pending_fingerprint()
+        lp.clear_pending()
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="pnl_alert", reason="different reason")
+        second = lp.pending_fingerprint()
+        assert first == second
+
+
+class TestValidationMatchesPending:
+    def test_false_when_no_pending(self):
+        assert lp.validation_matches_pending() is False
+
+    def test_false_when_pending_but_never_validated(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        assert lp.validation_matches_pending() is False
+
+    def test_true_after_saving_with_current_fingerprint(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        lp.save_validation_result(
+            passed=True, checks=[], baseline_metrics={}, candidate_metrics={},
+            fingerprint=lp.pending_fingerprint(),
+        )
+        assert lp.validation_matches_pending() is True
+
+    def test_false_after_pending_changes_since_validation(self):
+        lp.propose_pending("mr_vol_mult", 2.2, trigger="t", reason="r")
+        lp.save_validation_result(
+            passed=True, checks=[], baseline_metrics={}, candidate_metrics={},
+            fingerprint=lp.pending_fingerprint(),
+        )
+        lp.propose_pending("sl_floor_pct", 3.5, trigger="t", reason="r")
+        assert lp.validation_matches_pending() is False
+
+
 class TestApplyPending:
     def test_no_pending_change_is_a_safe_noop(self):
         assert lp.apply_pending() == []

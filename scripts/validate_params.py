@@ -86,6 +86,11 @@ def main() -> int:
         "--apply", action="store_true",
         help="If the gate passes, commit the candidate live and clear the pending file.",
     )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Re-run the backtest even if a cached validation for the current pending "
+             "proposal already exists (see lp.validation_matches_pending()).",
+    )
     args = parser.parse_args()
 
     live = _load_json(PARAMS_FILE)
@@ -96,6 +101,28 @@ def main() -> int:
     if not pending:
         print(f"No pending change found at {args.pending}")
         return 1
+
+    # Auto-validation (a host cron re-running this every few minutes against
+    # the one-shot `backtest` compose service, see docker-compose.yml) would
+    # otherwise redo the same heavy backtest repeatedly while nobody has
+    # acted on the proposal yet. Skip straight to the cached verdict when the
+    # staged proposal hasn't changed since it was last validated.
+    current_fingerprint = lp.pending_fingerprint()
+    if not args.force and lp.validation_matches_pending():
+        cached = lp.load_validation_result()
+        status = "PASSED" if cached["passed"] else "FAILED"
+        print(
+            f"이미 이 제안에 대한 검증 결과가 캐시되어 있음 (재실행 생략) — "
+            f"Gate {status} (cached, validated_at={cached['validated_at']})\n"
+            f"강제로 다시 검증하려면 --force 를 붙여 재실행하세요."
+        )
+        if not cached["passed"]:
+            return 1
+        if args.apply:
+            lp.apply_pending("validate_params.py --apply (cached)")
+            print("적용 완료 — restart requested.")
+        return 0
+
     candidate_sp = {**baseline_sp, **pending.get("strategy_params", {})}
     candidate_risk = {**baseline_risk, **pending.get("risk", {})}
 
@@ -118,6 +145,7 @@ def main() -> int:
         checks=[{"name": c.name, "passed": c.passed, "detail": c.detail} for c in result.gate.checks],
         baseline_metrics=result.baseline_metrics,
         candidate_metrics=result.candidate_metrics,
+        fingerprint=current_fingerprint,
     )
 
     if not result.gate.passed:

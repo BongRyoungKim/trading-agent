@@ -13,6 +13,9 @@ import inspect
 import sys
 from pathlib import Path
 
+import pytest
+
+import src.config.live_params as lp
 from src.config.live_params import DEFAULTS, PARAM_BOUNDS, RISK_KEYS
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
@@ -93,3 +96,143 @@ def test_every_sub_strategy_param_is_wired_end_to_end():
         "RegimeAdaptiveStrategy sub-strategy parameters are not wired "
         f"end-to-end: {missing}"
     )
+
+
+class _FakeCheck:
+    def __init__(self, name: str, passed: bool, detail: str) -> None:
+        self.name, self.passed, self.detail = name, passed, detail
+
+
+class _FakeGate:
+    def __init__(self, passed: bool) -> None:
+        self.passed = passed
+        self.checks = [_FakeCheck("profit_factor", passed, "ok")]
+
+    def summary(self) -> str:
+        return "gate summary"
+
+
+class _FakeResult:
+    _METRICS = {
+        "profit_factor": 1.0, "sharpe_ratio": 1.0, "max_drawdown_pct": 1.0,
+        "win_rate_pct": 50.0, "total_trades": 10,
+    }
+
+    def __init__(self, passed: bool) -> None:
+        self.gate = _FakeGate(passed)
+        self.baseline_metrics = dict(self._METRICS)
+        self.candidate_metrics = dict(self._METRICS)
+
+    def report(self) -> str:
+        return "report"
+
+
+@pytest.fixture
+def isolated_lp(tmp_path, monkeypatch):
+    """Same isolation pattern as tests/unit/test_live_params.py — redirect
+    every module-level file path validate_params.py reads/writes through
+    src.config.live_params into tmp_path."""
+    monkeypatch.setattr(lp, "PARAMS_FILE", tmp_path / ".strategy_params.json")
+    monkeypatch.setattr(lp, "AUDIT_LOG", tmp_path / "reports" / "param_change_log.jsonl")
+    monkeypatch.setattr(lp, "RESTART_FLAG", tmp_path / ".restart_requested")
+    monkeypatch.setattr(lp, "PENDING_FILE", tmp_path / "reports" / "pending_param_change.json")
+    monkeypatch.setattr(lp, "VALIDATION_FILE", tmp_path / "reports" / "pending_param_validation.json")
+    return tmp_path
+
+
+class TestAutoValidationCacheSkip:
+    """validate_params.py is meant to be re-run periodically by a host cron
+    (against the one-shot `backtest` compose service) so proposals get
+    validated without anyone SSHing in. Re-running the heavy backtest on
+    every tick while nobody has acted on the proposal yet would be wasteful
+    on the 1GB-RAM production VM, so a cached result for the still-current
+    proposal must be reused instead of triggering a new backtest."""
+
+    def _run_main(self, module, monkeypatch, tmp_path, calls) -> int:
+        monkeypatch.setattr(module, "PARAMS_FILE", tmp_path / ".strategy_params.json")
+        monkeypatch.setattr(
+            module, "validate_param_change",
+            lambda **kw: calls.append(kw) or _FakeResult(True),
+        )
+        monkeypatch.setattr(sys, "argv", ["validate_params.py", "--pending", str(lp.PENDING_FILE)])
+        return module.main()
+
+    def test_skips_backtest_when_cached_result_matches_pending(self, isolated_lp, monkeypatch, capsys):
+        module = _load_validate_params_module()
+        lp.propose_pending("mr_vol_mult", 2.5, trigger="t", reason="r")
+        lp.save_validation_result(
+            passed=True, checks=[], baseline_metrics={}, candidate_metrics={},
+            fingerprint=lp.pending_fingerprint(),
+        )
+
+        calls: list[dict] = []
+        rc = self._run_main(module, monkeypatch, isolated_lp, calls)
+
+        assert rc == 0
+        assert calls == []
+        assert "재실행 생략" in capsys.readouterr().out
+
+    def test_runs_and_caches_when_pending_changed_since_last_validation(self, isolated_lp, monkeypatch):
+        module = _load_validate_params_module()
+        lp.propose_pending("mr_vol_mult", 2.5, trigger="t", reason="r")
+        old_fingerprint = lp.pending_fingerprint()
+        lp.save_validation_result(
+            passed=True, checks=[], baseline_metrics={}, candidate_metrics={}, fingerprint=old_fingerprint,
+        )
+        lp.propose_pending("sl_floor_pct", 3.5, trigger="t", reason="r")
+        assert lp.pending_fingerprint() != old_fingerprint
+
+        calls: list[dict] = []
+        rc = self._run_main(module, monkeypatch, isolated_lp, calls)
+
+        assert rc == 0
+        assert len(calls) == 1
+        saved = lp.load_validation_result()
+        assert saved["pending_fingerprint"] == lp.pending_fingerprint()
+
+    def test_force_reruns_even_when_cache_matches(self, isolated_lp, monkeypatch):
+        module = _load_validate_params_module()
+        lp.propose_pending("mr_vol_mult", 2.5, trigger="t", reason="r")
+        lp.save_validation_result(
+            passed=True, checks=[], baseline_metrics={}, candidate_metrics={},
+            fingerprint=lp.pending_fingerprint(),
+        )
+
+        calls: list[dict] = []
+        monkeypatch.setattr(module, "PARAMS_FILE", isolated_lp / ".strategy_params.json")
+        monkeypatch.setattr(
+            module, "validate_param_change",
+            lambda **kw: calls.append(kw) or _FakeResult(True),
+        )
+        monkeypatch.setattr(
+            sys, "argv", ["validate_params.py", "--pending", str(lp.PENDING_FILE), "--force"],
+        )
+
+        rc = module.main()
+
+        assert rc == 0
+        assert len(calls) == 1
+
+    def test_cached_failed_result_is_not_applied(self, isolated_lp, monkeypatch):
+        module = _load_validate_params_module()
+        lp.propose_pending("mr_vol_mult", 2.5, trigger="t", reason="r")
+        lp.save_validation_result(
+            passed=False, checks=[], baseline_metrics={}, candidate_metrics={},
+            fingerprint=lp.pending_fingerprint(),
+        )
+
+        calls: list[dict] = []
+        monkeypatch.setattr(module, "PARAMS_FILE", isolated_lp / ".strategy_params.json")
+        monkeypatch.setattr(
+            module, "validate_param_change",
+            lambda **kw: calls.append(kw) or _FakeResult(True),
+        )
+        monkeypatch.setattr(
+            sys, "argv", ["validate_params.py", "--pending", str(lp.PENDING_FILE), "--apply"],
+        )
+
+        rc = module.main()
+
+        assert rc == 1
+        assert calls == []
+        assert lp.has_pending_change() is True  # never applied

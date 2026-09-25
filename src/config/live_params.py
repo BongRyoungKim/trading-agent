@@ -11,6 +11,7 @@ ScheduledTaskRunner가 승률/PnL/SL비율 경보를 감지하면 이 모듈을 
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from datetime import datetime, timedelta, timezone
@@ -273,13 +274,36 @@ def clear_pending() -> None:
     PENDING_FILE.unlink(missing_ok=True)
 
 
+def _pending_fingerprint_of(pending: dict[str, Any]) -> str:
+    payload = {"strategy_params": pending.get("strategy_params", {}), "risk": pending.get("risk", {})}
+    blob = json.dumps(payload, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def pending_fingerprint() -> str | None:
+    """Stable hash of the currently-staged pending change's param values
+    (trigger/reason metadata excluded). None if nothing is staged.
+
+    Used to tell whether a cached validation result still describes what's
+    actually staged right now — staging a new or changed proposal produces
+    a different fingerprint, invalidating any older cached validation."""
+    pending = _load_pending()
+    if not pending:
+        return None
+    return _pending_fingerprint_of(pending)
+
+
 def save_validation_result(
     passed: bool, checks: list[dict[str, Any]], baseline_metrics: dict[str, Any],
-    candidate_metrics: dict[str, Any],
+    candidate_metrics: dict[str, Any], fingerprint: str | None = None,
 ) -> None:
     """scripts/validate_params.py calls this right after running the
     performance gate, whether it passed or failed, so the dashboard can
-    show the comparison without re-running the (heavy) backtest itself."""
+    show the comparison without re-running the (heavy) backtest itself.
+
+    fingerprint should be pending_fingerprint() taken at the same time the
+    backtest was run — it lets validation_matches_pending() detect a stale
+    cache when the pending proposal changes before anyone acts on it."""
     VALIDATION_FILE.parent.mkdir(parents=True, exist_ok=True)
     VALIDATION_FILE.write_text(
         json.dumps(
@@ -289,6 +313,7 @@ def save_validation_result(
                 "baseline_metrics": baseline_metrics,
                 "candidate_metrics": candidate_metrics,
                 "validated_at": datetime.now(KST).isoformat(timespec="seconds"),
+                "pending_fingerprint": fingerprint,
             },
             ensure_ascii=False, indent=2,
         ),
@@ -303,6 +328,23 @@ def load_validation_result() -> dict[str, Any] | None:
         return json.loads(VALIDATION_FILE.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def validation_matches_pending() -> bool:
+    """True only if a cached validation result exists AND its fingerprint
+    matches what's currently staged — i.e. the pending proposal has not
+    changed since it was validated. False if nothing is staged, nothing has
+    been validated yet, or the staged proposal changed since the cached run.
+
+    scripts/validate_params.py uses this to skip re-running the (heavy)
+    backtest on every periodic auto-validation tick when nothing changed."""
+    current = pending_fingerprint()
+    if current is None:
+        return False
+    result = load_validation_result()
+    if result is None:
+        return False
+    return result.get("pending_fingerprint") == current
 
 
 def clear_validation_result() -> None:
