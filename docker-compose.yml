@@ -68,6 +68,30 @@ services:
     entrypoint: ["python", "-m", "src.confluence.runner"]
     command: []
 
+  # 다변량 ML 신호(RandomForest) 페이퍼 스캐너 — trading-agent와 완전히 독립.
+  # 2026-09-27 리서치(27개 종목, 6구간 워크포워드 — 전 구간에서 "아무 날에나
+  # 사서 5일 보유" 기준선 대비 우위 확인, 단 AUC 0.51~0.63으로 약한 신호)에서
+  # 나온 3번째 비기각 후보를 페이퍼로 먼저 검증한다. PAPER 전용 — CLAUDE.md
+  # 하드게이트(실매매 전 페이퍼 검증 필수)에 따름.
+  # 모델은 scripts/train_ml_signal_model.py로 미리 학습해 data/ml_signal_
+  # model.joblib에 저장해둔 것을 읽기 전용으로 로드만 한다 — 컨테이너 안에서
+  # 절대 재학습하지 않는다.
+  #   docker compose up -d --build ml-signal
+  ml-signal:
+    build: .
+    env_file: .env
+    # 로그 파일 경합 문제(onchain-btc 쪽 주석 참고) 방지용 분리.
+    environment:
+      - LOG_FILE_PATH=logs/ml_signal.log
+    volumes:
+      - ./logs:/app/logs
+      - ./data/ml_signal_model.joblib:/app/data/ml_signal_model.joblib:ro
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    entrypoint: ["python", "-m", "src.ml_signal.runner"]
+    command: []
+
   # Run a one-shot backtest and exit
   #
   # scripts/auto_validate_cron.sh (host crontab) also reuses this service —
