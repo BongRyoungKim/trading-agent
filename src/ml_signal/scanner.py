@@ -121,11 +121,26 @@ class MLSignalScanner:
     # ── Entry scan (run every scan_every_n_ticks) ───────────────────────────
 
     def refresh_signal_and_scan(self) -> None:
+        """
+        전 종목을 먼저 전부 스캔해 확률>entry_threshold인 후보를 모은 뒤,
+        **확률이 높은 순으로** 남은 슬롯만큼만 진입한다.
+
+        예전엔 cfg.symbols 순서(알파벳순)로 하나씩 확인하다 슬롯이 차면
+        즉시 멈췄는데, 이러면 "그날 가장 자신있는 신호"가 아니라 "이름이
+        앞쪽인 종목"이 우연히 선택되는 구조적 편향이 생겼다(2026-10-07
+        발견 — AAVE/ADA/ALGO/ARB/AVAX가 매번 똑같이 뽑힌 원인). 백테스트는
+        슬롯 경합 자체가 없었으므로(전 종목 동시 보유 가정), 실거래의
+        슬롯 제한 안에서는 확률 랭킹으로 고르는 게 백테스트 의도에 더
+        가깝다.
+        """
         cfg = self._scanner_cfg
+        available_slots = cfg.max_concurrent_positions - len(self._positions)
+        if available_slots <= 0:
+            logger.debug("ML signal: max concurrent positions reached, skipping scan")
+            return
+
+        candidates: list[tuple[float, str]] = []
         for symbol in cfg.symbols:
-            if len(self._positions) >= cfg.max_concurrent_positions:
-                logger.debug("ML signal: max concurrent positions reached, skipping scan")
-                return
             if symbol in self._positions or self._portfolio.has_position(symbol):
                 continue
 
@@ -141,7 +156,11 @@ class MLSignalScanner:
 
             proba = self._model.predict_proba(row)
             if proba > cfg.entry_threshold:
-                self._open_position(symbol, proba)
+                candidates.append((proba, symbol))
+
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        for proba, symbol in candidates[:available_slots]:
+            self._open_position(symbol, proba)
 
     def _open_position(self, symbol: str, proba: float) -> None:
         try:

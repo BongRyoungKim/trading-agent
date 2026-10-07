@@ -91,7 +91,12 @@ class TestRefreshSignalAndScan:
         model.predict_proba.assert_not_called()
 
     def test_skips_symbol_already_held(self) -> None:
-        scanner, exchange, telegram, portfolio, model = _make_scanner()
+        scanner, exchange, telegram, portfolio, model = _make_scanner(
+            scanner_cfg=MLSignalScannerConfig(
+                symbols=("BTC/KRW", "ETH/KRW"), position_size_krw=Decimal("100000"),
+                max_concurrent_positions=1, entry_threshold=0.5,
+            )
+        )
         exchange.get_ohlcv.return_value = _make_bars(90)
         exchange.get_ticker.return_value = _make_ticker("BTC/KRW", 1000.0)
         model.predict_proba.return_value = 0.8
@@ -101,8 +106,8 @@ class TestRefreshSignalAndScan:
 
         scanner.refresh_signal_and_scan()
 
-        # BTC already held -> only ETH should be scanned this time
-        assert model.predict_proba.call_count <= 1
+        # BTC already held and no slots free -> ETH shouldn't even be evaluated
+        assert model.predict_proba.call_count == 0
 
     def test_stops_scanning_once_max_concurrent_positions_reached(self) -> None:
         scanner, exchange, telegram, portfolio, model = _make_scanner(
@@ -119,6 +124,28 @@ class TestRefreshSignalAndScan:
         scanner.refresh_signal_and_scan()
 
         assert len(scanner.open_symbols) == 1  # slot limit respected
+
+    def test_picks_highest_probability_candidates_first(self) -> None:
+        # 알파벳순으로 BTC가 가장 먼저 나오지만 확률은 XRP가 제일 높음 ->
+        # 슬롯이 2개뿐이면 ETH(가장 낮음)가 아니라 BTC+XRP가 선택돼야 함
+        scanner, exchange, telegram, portfolio, model = _make_scanner(
+            scanner_cfg=MLSignalScannerConfig(
+                symbols=("BTC/KRW", "ETH/KRW", "XRP/KRW"),
+                position_size_krw=Decimal("100000"),
+                max_concurrent_positions=2, entry_threshold=0.5,
+            )
+        )
+        exchange.get_ohlcv.return_value = _make_bars(90)
+
+        def ticker_for(symbol, *_args, **_kwargs):
+            return _make_ticker(symbol, 1000.0)
+        exchange.get_ticker.side_effect = ticker_for
+        model.predict_proba.side_effect = [0.9, 0.6, 0.95]  # BTC, ETH, XRP in scan order
+
+        scanner.refresh_signal_and_scan()
+
+        assert set(scanner.open_symbols) == {"BTC/KRW", "XRP/KRW"}
+        assert "ETH/KRW" not in scanner.open_symbols
 
     def test_ohlcv_fetch_failure_is_skipped_not_raised(self) -> None:
         scanner, exchange, telegram, portfolio, model = _make_scanner()
