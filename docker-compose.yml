@@ -92,6 +92,31 @@ services:
     entrypoint: ["python", "-m", "src.ml_signal.runner"]
     command: []
 
+  # VPIN(방향성 거래량 불균형) 페이퍼 스캐너 — trading-agent와 완전히 독립.
+  # 2026-10-08 리서치(12개 종목, 8개월 구간별 분해 6구간 중 4구간 플러스,
+  # 최근 구간 특히 강함 Sharpe 최대 +5.06)에서 나온 4번째 비기각 후보를
+  # 페이퍼로 먼저 검증한다. PAPER 전용 — CLAUDE.md 하드게이트(실매매 전
+  # 페이퍼 검증 필수)에 따름. 다른 셋과 달리 최대보유 20시간으로 회전이
+  # 훨씬 빨라, 사용자 요청대로 "거래 건수 기준"(약 20~30건)으로 짧게
+  # 관찰기간을 잡을 수 있다.
+  # 신호는 바이낸스 테이커 매수/매도 데이터(Upbit에는 없는 필드)로 계산,
+  # 포지션 체결/관리는 Upbit에서 — 별도 API 키 불필요(바이낸스 공개
+  # REST만 사용).
+  #   docker compose up -d --build vpin-signal
+  vpin-signal:
+    build: .
+    env_file: .env
+    # 로그 파일 경합 문제(onchain-btc 쪽 주석 참고) 방지용 분리.
+    environment:
+      - LOG_FILE_PATH=logs/vpin_signal.log
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    entrypoint: ["python", "-m", "src.vpin_signal.runner"]
+    command: []
+
   # Run a one-shot backtest and exit
   #
   # scripts/auto_validate_cron.sh (host crontab) also reuses this service —
