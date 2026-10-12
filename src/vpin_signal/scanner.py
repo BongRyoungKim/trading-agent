@@ -22,6 +22,8 @@ from src.vpin_signal.binance_feed import fetch_recent_klines
 from src.vpin_signal.exits import VPINExitConfig, VPINPosition, check_exit
 from src.vpin_signal.signal import MIN_BARS_REQUIRED, latest_row
 from src.portfolio.tracker import PortfolioTracker
+from src.risk.manager import RiskManager
+from src.utils.exceptions import MaxDrawdownExceededError, TradingCooldownError
 
 if TYPE_CHECKING:
     from src.exchange.upbit import UpbitClient
@@ -65,6 +67,7 @@ class VPINScanner:
         exit_cfg: VPINExitConfig | None = None,
         scanner_cfg: VPINScannerConfig | None = None,
         binance_fetcher: Callable[[str, int], pd.DataFrame] = None,
+        risk_manager: RiskManager | None = None,
     ) -> None:
         self._exchange = exchange
         self._telegram = telegram
@@ -74,6 +77,13 @@ class VPINScanner:
         self._binance_fetcher = binance_fetcher or (
             lambda sym, limit: fetch_recent_klines(sym, limit=limit)
         )
+        # 2026-10-12 추가 — 실거래 전환 전 필수 안전장치(사용자 요청).
+        # None이면(기본값) 기존처럼 안전장치 없이 동작 — 기존 테스트/배포와
+        # 100% 하위호환. 넘기면 연속손실 쿨다운 + 일일손실한도 + MDD 강제정지가
+        # 적용된다. src.risk.manager.RiskManager는 라이브 15분봉 엔진이 쓰는
+        # 것과 동일한 클래스 — 재구현하지 않고 그대로 재사용.
+        self._risk_manager = risk_manager
+        self._risk_halt_alerted = False
         self._positions: dict[str, VPINPosition] = {}
 
     @property
@@ -115,13 +125,42 @@ class VPINScanner:
         reason_kr = {"stop_loss": "손절", "take_profit": "익절(RR목표)", "time_stop": "최대보유시간 초과"}.get(reason, reason)
         self._telegram.send(f"📊 VPIN신호 청산 [{reason_kr}] <code>{symbol}</code>")
 
+        if self._risk_manager is not None:
+            cooldown_triggered = self._risk_manager.on_position_closed(net_pnl)
+            if cooldown_triggered:
+                self._telegram.send_risk_alert(
+                    f"VPIN신호 연속손실 서킷브레이커 발동 — 신규 진입 당분간 중단\n"
+                    f"(연속손실 {self._risk_manager.consecutive_loss_limit}회 도달, "
+                    f"{self._risk_manager.consecutive_loss_cooldown_minutes}분간 쿨다운)"
+                )
+
     # ── Entry scan (run every tick -- 15분봉 신호라 매 틱 재계산) ───────────
+
+    def _risk_gates_allow_entry(self) -> bool:
+        """MDD 강제정지 / 일일손실한도 / 연속손실 쿨다운 중 하나라도 걸리면
+        False. risk_manager가 없으면(기본값) 항상 True — 기존 동작 유지."""
+        if self._risk_manager is None:
+            return True
+        try:
+            self._risk_manager.check_drawdown()
+            self._risk_manager.check_daily_loss()
+            self._risk_manager.check_cooldown()
+        except (MaxDrawdownExceededError, TradingCooldownError) as exc:
+            if not self._risk_halt_alerted:
+                self._risk_halt_alerted = True
+                logger.warning("VPIN: risk gate blocking new entries", reason=str(exc))
+                self._telegram.send_risk_alert(f"VPIN신호 신규 진입 차단: {exc}")
+            return False
+        self._risk_halt_alerted = False
+        return True
 
     def refresh_signal_and_scan(self) -> None:
         cfg = self._scanner_cfg
         available_slots = cfg.max_concurrent_positions - len(self._positions)
         if available_slots <= 0:
             logger.debug("VPIN: max concurrent positions reached, skipping scan")
+            return
+        if not self._risk_gates_allow_entry():
             return
 
         candidates: list[tuple[float, str]] = []  # (vpin값, symbol) -- 강도순 정렬용
@@ -188,6 +227,8 @@ class VPINScanner:
             atr_value=atr_value, cfg=self._exit_cfg,
         )
         self._positions[symbol] = position
+        if self._risk_manager is not None:
+            self._risk_manager.on_position_opened()
 
         logger.info(
             "VPIN position opened (PAPER)", symbol=symbol, entry_price=float(entry_price),

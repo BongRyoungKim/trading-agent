@@ -1,6 +1,7 @@
 """Unit tests for src/vpin_signal/scanner.py (wiring layer, exchange/telegram/binance mocked)."""
 from __future__ import annotations
 
+import types
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
@@ -10,6 +11,7 @@ import pandas as pd
 import pytest
 
 from src.exchange.models import OHLCVBar, Ticker
+from src.risk.manager import PortfolioState, RiskManager
 from src.vpin_signal.exits import VPINExitConfig
 from src.vpin_signal.scanner import VPINScanner, VPINScannerConfig
 from src.vpin_signal.signal import MIN_BARS_REQUIRED, WINDOW
@@ -124,6 +126,117 @@ class TestRefreshSignalAndScan:
         scanner.refresh_signal_and_scan()
 
         assert scanner.open_symbols == []
+
+
+def _make_risk_manager(initial_capital=Decimal("1000000"), **kwargs) -> RiskManager:
+    settings = types.SimpleNamespace(max_drawdown_halt=0.15, max_daily_loss=0.05, max_open_positions=100)
+    state = PortfolioState(capital=initial_capital, peak_capital=initial_capital)
+    return RiskManager(settings, state, **kwargs)
+
+
+class TestRiskManagerIntegration:
+    """2026-10-12 추가 — 실거래 전환 전 필수 안전장치(사용자 요청).
+    risk_manager=None(기본값)이면 기존 동작 그대로라는 건 다른 모든 테스트가
+    이미 보장한다(이 클래스 추가 전부터 전부 통과)."""
+
+    def test_drawdown_halt_blocks_new_entries(self) -> None:
+        scanner, exchange, telegram, portfolio, fetcher = _make_scanner()
+        risk_manager = _make_risk_manager(initial_capital=Decimal("1000000"))
+        risk_manager._state.capital = Decimal("800000")  # -20% drawdown > 15% halt
+        scanner._risk_manager = risk_manager
+        fetcher.return_value = _make_binance_df(MIN_BARS_REQUIRED + 10, bullish=True)
+
+        scanner.refresh_signal_and_scan()
+
+        assert scanner.open_symbols == []
+        telegram.send_risk_alert.assert_called_once()
+
+    def test_drawdown_halt_only_alerts_once_while_still_blocked(self) -> None:
+        scanner, exchange, telegram, portfolio, fetcher = _make_scanner()
+        risk_manager = _make_risk_manager()
+        risk_manager._state.capital = Decimal("800000")
+        scanner._risk_manager = risk_manager
+        fetcher.return_value = _make_binance_df(MIN_BARS_REQUIRED + 10, bullish=True)
+
+        scanner.refresh_signal_and_scan()
+        scanner.refresh_signal_and_scan()
+        scanner.refresh_signal_and_scan()
+
+        telegram.send_risk_alert.assert_called_once()  # 매 틱 스팸 방지
+
+    def test_cooldown_blocks_new_entries_after_consecutive_losses(self) -> None:
+        scanner, exchange, telegram, portfolio, fetcher = _make_scanner()
+        risk_manager = _make_risk_manager(consecutive_loss_limit=1, consecutive_loss_cooldown_minutes=720)
+        scanner._risk_manager = risk_manager
+        risk_manager.on_position_closed(Decimal("-1000"))  # 1회 손실 -> 즉시 쿨다운(한도=1)
+        fetcher.return_value = _make_binance_df(MIN_BARS_REQUIRED + 10, bullish=True)
+
+        scanner.refresh_signal_and_scan()
+
+        assert scanner.open_symbols == []
+
+    def test_opening_position_calls_on_position_opened(self) -> None:
+        scanner, exchange, telegram, portfolio, fetcher = _make_scanner()
+        risk_manager = _make_risk_manager()
+        scanner._risk_manager = risk_manager
+        fetcher.return_value = _make_binance_df(MIN_BARS_REQUIRED + 10, bullish=True)
+        exchange.get_ohlcv.return_value = [_make_bar(1000.0) for _ in range(20)]
+        exchange.get_ticker.return_value = _make_ticker("BTC/KRW", 1000.0)
+
+        scanner.refresh_signal_and_scan()
+
+        assert risk_manager._state.open_positions == len(scanner.open_symbols) > 0
+
+    def test_closing_position_at_a_loss_updates_consecutive_loss_count(self) -> None:
+        # 심볼 1개로 제한 -- 아니면 두 심볼이 동시에 열려서 둘 다 손절될 때
+        # consecutive_losses가 1이 아니라 2가 되어버림(get_ticker 모의객체가
+        # 심볼 구분 없이 전역 반환값 하나만 쓰기 때문).
+        scanner, exchange, telegram, portfolio, fetcher = _make_scanner(
+            scanner_cfg=VPINScannerConfig(
+                symbol_pairs=(("BTC/KRW", "BTCUSDT"),),
+                position_size_krw=Decimal("100000"), max_concurrent_positions=1,
+            )
+        )
+        risk_manager = _make_risk_manager(consecutive_loss_limit=5)  # 이번엔 안 걸리게 넉넉히
+        scanner._risk_manager = risk_manager
+        fetcher.return_value = _make_binance_df(MIN_BARS_REQUIRED + 10, bullish=True)
+        exchange.get_ohlcv.return_value = [_make_bar(1000.0) for _ in range(20)]
+        exchange.get_ticker.return_value = _make_ticker("BTC/KRW", 1000.0)
+        scanner.refresh_signal_and_scan()
+        opened_symbol = scanner.open_symbols[0]
+
+        exchange.get_ticker.return_value = _make_ticker(opened_symbol, 500.0)  # 큰 폭 하락 -> 손절
+        scanner.check_exits()
+
+        assert risk_manager._state.consecutive_losses == 1
+
+    def test_cooldown_newly_triggered_sends_risk_alert(self) -> None:
+        scanner, exchange, telegram, portfolio, fetcher = _make_scanner()
+        risk_manager = _make_risk_manager(consecutive_loss_limit=1, consecutive_loss_cooldown_minutes=720)
+        scanner._risk_manager = risk_manager
+        fetcher.return_value = _make_binance_df(MIN_BARS_REQUIRED + 10, bullish=True)
+        exchange.get_ohlcv.return_value = [_make_bar(1000.0) for _ in range(20)]
+        exchange.get_ticker.return_value = _make_ticker("BTC/KRW", 1000.0)
+        scanner.refresh_signal_and_scan()
+        opened_symbol = scanner.open_symbols[0]
+
+        exchange.get_ticker.return_value = _make_ticker(opened_symbol, 500.0)  # 손절 -> 연속손실 1회 -> 한도 도달
+        scanner.check_exits()
+
+        telegram.send_risk_alert.assert_called_once()
+
+    def test_no_risk_manager_still_opens_and_closes_normally(self) -> None:
+        # risk_manager=None(기본값)일 때 안전장치 추가 전과 완전히 동일하게
+        # 동작해야 한다 -- 배포된 버전과의 하위호환성 명시적 확인.
+        scanner, exchange, telegram, portfolio, fetcher = _make_scanner()
+        assert scanner._risk_manager is None
+        fetcher.return_value = _make_binance_df(MIN_BARS_REQUIRED + 10, bullish=True)
+        exchange.get_ohlcv.return_value = [_make_bar(1000.0) for _ in range(20)]
+        exchange.get_ticker.return_value = _make_ticker("BTC/KRW", 1000.0)
+
+        scanner.refresh_signal_and_scan()
+
+        assert len(scanner.open_symbols) > 0
 
 
 class TestCheckExits:

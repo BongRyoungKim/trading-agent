@@ -23,6 +23,7 @@ from decimal import Decimal
 from src.config.settings import get_settings
 from src.exchange.upbit import UpbitClient
 from src.portfolio.tracker import PortfolioTracker
+from src.risk.manager import PortfolioState, RiskManager
 from src.utils.logger import logger, setup_logger
 from src.utils.telegram import TelegramClient
 from src.vpin_signal.exits import VPINExitConfig
@@ -45,6 +46,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sl-floor-pct", type=float, default=5.0)
     parser.add_argument("--tp-rr-multiplier", type=float, default=1.5)
     parser.add_argument("--max-hold-hours", type=float, default=20.0)
+    parser.add_argument(
+        "--consecutive-loss-limit", type=int, default=3,
+        help="이 횟수만큼 연속 손실 시 신규 진입 일시중단 (라이브 15분봉 엔진 기본값과 동일). 0=비활성",
+    )
+    parser.add_argument(
+        "--consecutive-loss-cooldown-min", type=int, default=720,
+        help="연속손실 쿨다운 지속 시간(분). 기본 720분(12시간)",
+    )
+    parser.add_argument(
+        "--disable-risk-manager", action="store_true",
+        help="MDD강제정지/일일손실한도/연속손실쿨다운 전부 비활성화(기존 배포 버전과 동일하게 동작) "
+             "-- 안전장치 자체를 끄는 옵션이라 기본값은 False(항상 켜짐)",
+    )
     return parser
 
 
@@ -77,21 +91,37 @@ def main(argv: list[str] | None = None) -> int:
         max_concurrent_positions=args.max_concurrent_positions,
     )
 
+    # 2026-10-12 추가 — 실거래 전환 전 필수 안전장치(사용자 요청). 라이브
+    # 15분봉 엔진과 동일한 RiskManager를 그대로 재사용 — MDD강제정지/
+    # 일일손실한도 임계값은 settings(.env)의 전역값을 그대로 쓴다(별도
+    # VPIN 전용값을 아직 정하지 않았으므로 라이브와 같은 기준 적용).
+    risk_manager = None
+    if not args.disable_risk_manager:
+        initial_capital = Decimal(str(args.initial_capital_krw))
+        risk_state = PortfolioState(capital=initial_capital, peak_capital=initial_capital)
+        risk_manager = RiskManager(
+            settings, risk_state,
+            consecutive_loss_limit=args.consecutive_loss_limit,
+            consecutive_loss_cooldown_minutes=args.consecutive_loss_cooldown_min,
+        )
+
     logger.info(
         "VPIN scanner starting (PAPER mode, independent process)",
         symbols=len(scanner_cfg.symbol_pairs),
         initial_capital_krw=args.initial_capital_krw,
         max_concurrent_positions=args.max_concurrent_positions,
+        risk_manager_enabled=risk_manager is not None,
     )
     telegram.send(
         "📊 <b>VPIN 방향성 거래량 신호 스캐너 시작</b> (PAPER, 라이브 봇과 독립 프로세스)\n"
         f"종목 {len(scanner_cfg.symbol_pairs)}개  |  최대동시보유 {args.max_concurrent_positions}  |  "
-        f"최대보유시간 {args.max_hold_hours}시간  |  페이퍼 초기자본 {args.initial_capital_krw:,.0f}원"
+        f"최대보유시간 {args.max_hold_hours}시간  |  페이퍼 초기자본 {args.initial_capital_krw:,.0f}원\n"
+        f"안전장치: {'MDD ' + str(int(settings.max_drawdown_halt*100)) + '% / 일일손실 ' + str(int(settings.max_daily_loss*100)) + '% / 연속손실 ' + str(args.consecutive_loss_limit) + '회 쿨다운 적용' if risk_manager else '비활성(--disable-risk-manager)'}"
     )
 
     scanner = VPINScanner(
         exchange=exchange, telegram=telegram, portfolio=portfolio,
-        exit_cfg=exit_cfg, scanner_cfg=scanner_cfg,
+        exit_cfg=exit_cfg, scanner_cfg=scanner_cfg, risk_manager=risk_manager,
     )
     scanner.run_forever(interval_seconds=args.interval_seconds)
     return 0  # pragma: no cover — run_forever loops forever; unreachable in practice
