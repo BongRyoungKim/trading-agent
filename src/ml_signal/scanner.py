@@ -160,6 +160,18 @@ class MLSignalScanner:
 
         candidates.sort(key=lambda c: c[0], reverse=True)
         for proba, symbol in candidates[:available_slots]:
+            # 슬롯 여유가 있어도 실제 현금이 포지션 사이즈보다 적으면 중단한다
+            # (2026-10-12 사고: 신호 5개가 한 틱에 동시에 떠서 슬롯 체크만
+            # 통과한 채 순서대로 진입하다가 마지막 진입에서 잔고가 마이너스로
+            # 떨어짐 — PortfolioTracker.open_position()은 중복 심볼만 막고
+            # 현금 부족은 검증하지 않는다, 호출자 책임).
+            if self._portfolio.cash < self._scanner_cfg.position_size_krw:
+                logger.debug(
+                    "ML signal: insufficient cash for further entries, stopping scan",
+                    cash=float(self._portfolio.cash),
+                    position_size_krw=float(self._scanner_cfg.position_size_krw),
+                )
+                break
             self._open_position(symbol, proba)
 
     def _open_position(self, symbol: str, proba: float) -> None:

@@ -42,7 +42,7 @@ def _make_ticker(symbol: str, price: float) -> Ticker:
 def _make_scanner(**overrides) -> tuple[MLSignalScanner, MagicMock, MagicMock, PortfolioTracker, MagicMock]:
     exchange = MagicMock()
     telegram = MagicMock()
-    portfolio = PortfolioTracker(initial_cash=Decimal("1000000"))
+    portfolio = PortfolioTracker(initial_cash=overrides.get("initial_cash", Decimal("1000000")))
     model = MagicMock()
     model.predict_proba.return_value = 0.0
     exit_cfg = overrides.get("exit_cfg") or MLSignalExitConfig()
@@ -124,6 +124,29 @@ class TestRefreshSignalAndScan:
         scanner.refresh_signal_and_scan()
 
         assert len(scanner.open_symbols) == 1  # slot limit respected
+
+    def test_stops_opening_once_cash_cannot_cover_next_position(self) -> None:
+        # 2026-10-12 사고 재현: 슬롯은 넉넉해도 실제 현금이 모자라면 멈춰야
+        # 한다 — 안 그러면 PortfolioTracker.cash가 마이너스로 떨어진다
+        # (open_position()은 중복 심볼만 막고 현금 부족은 검증 안 함).
+        scanner, exchange, telegram, portfolio, model = _make_scanner(
+            initial_cash=Decimal("900000"),
+            scanner_cfg=MLSignalScannerConfig(
+                symbols=("AAA/KRW", "BBB/KRW", "CCC/KRW", "DDD/KRW"),
+                position_size_krw=Decimal("250000"),
+                max_concurrent_positions=4, entry_threshold=0.5,
+            ),
+        )
+        exchange.get_ohlcv.return_value = _make_bars(90)
+        exchange.get_ticker.return_value = _make_ticker("X/KRW", 1000.0)
+        model.predict_proba.return_value = 0.9
+
+        scanner.refresh_signal_and_scan()
+
+        # 900,000원으로는 250,000원짜리 포지션 3개(750,000원)까지만 감당 —
+        # 4개째를 열면 마이너스가 되므로 3개에서 멈춰야 한다.
+        assert len(scanner.open_symbols) == 3
+        assert portfolio.cash >= Decimal("0")
 
     def test_picks_highest_probability_candidates_first(self) -> None:
         # 알파벳순으로 BTC가 가장 먼저 나오지만 확률은 XRP가 제일 높음 ->
