@@ -150,7 +150,7 @@ def render_dashboard(
     pnl_html = _render_pnl(pnl)
     pending_params_html = _render_pending_params(pending_params)
     balance_html = _render_balance(balance)
-    ticks_html = _render_ticks(ticks)
+    ticks_html = _render_ticks(ticks, symbol_names)
     # Seed the client-side _ticksMap with server-rendered data so the table is
     # immediately populated and SSE updates are merged into it.
     _ticks_seed_js = "\n".join(
@@ -834,7 +834,7 @@ function renderTicks(items, flashSymbol, prevTick) {{
         onclick="openUpbit('${{t.symbol}}')" style="cursor:pointer"
         title="클릭 시 업비트 ${{t.symbol}} 거래소 페이지가 새 창으로 열립니다">
       <td style="text-align:center;color:var(--text-dim);font-size:var(--fs-1);font-weight:var(--fw-medium)">${{rank}}</td>
-      <td><code>${{t.symbol}}</code></td>
+      <td><code>${{symLabel(t.symbol)}}</code></td>
       <td>${{regimeBadge(m.regime)}}</td>
       <td><span class="badge" style="background:${{actionBg(t.action)}};color:${{ac}}">${{t.action}}</span>${{actionDot}}</td>
       <td style="font-weight:var(--fw-medium)">${{price}}</td>
@@ -1943,7 +1943,8 @@ def _render_positions(positions: list[dict], symbol_names: dict[str, str]) -> st
     )
 
 
-def _render_ticks(ticks: list[dict]) -> str:
+def _render_ticks(ticks: list[dict], symbol_names: dict[str, str] | None = None) -> str:
+    symbol_names = symbol_names or {}
     if not ticks:
         return '<p class="empty">아직 평가 없음 (첫 tick 대기 중)</p>'
     # (fg, bg) 쌍 — 배지 배경은 항상 fg의 저채도 틴트 버전(var(--signal-*-bg))을 쓴다.
@@ -2008,7 +2009,7 @@ def _render_ticks(ticks: list[dict]) -> str:
         return (
             f"<tr>"
             f"<td style='text-align:center;color:var(--text-dim);font-size:var(--fs-1);font-weight:var(--fw-medium)'>{rank}</td>"
-            f"<td><code>{sym}</code></td>"
+            f"<td><code>{_symbol_label(sym, symbol_names)}</code></td>"
             f"<td>{regime_html}</td>"
             f"<td><span class='badge' style='background:{color_bg};color:{color}'>{action}</span></td>"
             f"<td style='font-weight:var(--fw-medium)'>{price_str}</td>"

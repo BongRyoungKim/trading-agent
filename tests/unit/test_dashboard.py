@@ -628,6 +628,22 @@ class TestRenderDashboard:
         )
         assert "<code>비트코인 (BTC)</code>" in html
 
+    def test_html_tick_panel_symbol_uses_korean_display_name(self) -> None:
+        html = render_dashboard(
+            self._status(), [], {}, ticks=[{"symbol": "BTC/KRW"}],
+            symbol_names={"BTC/KRW": "비트코인 (BTC)"},
+        )
+        assert "<code>비트코인 (BTC)</code>" in html
+
+    def test_html_tick_panel_symbol_falls_back_to_bare_ticker_without_mapping(self) -> None:
+        html = render_dashboard(self._status(), [], {}, ticks=[{"symbol": "XRP/KRW"}], symbol_names={})
+        assert "<code>XRP</code>" in html
+
+    def test_html_tick_panel_js_uses_sym_label_helper(self) -> None:
+        """클라이언트 JS renderTicks()도 symLabel()을 거쳐야 한다(서버/클라 일관성)."""
+        html = render_dashboard(self._status(), [], {})
+        assert "<code>${symLabel(t.symbol)}</code>" in html
+
     def test_html_sym_label_js_helper_present(self) -> None:
         """클라이언트 JS 측 심볼 라벨 헬퍼(symLabel)와 캐시 변수가 있어야 한다."""
         html = render_dashboard(self._status(), [], {})
