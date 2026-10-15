@@ -123,7 +123,6 @@ def render_dashboard(
     hours_info = f"{trading_hours} UTC · {trading_days}"
 
     equity_svg = _render_equity_svg(equity)
-    symbol_pnl_svg = _render_symbol_pnl_svg(trades)
     trade_filter_bar_html = _render_trade_filter_bar(trades)
     stats_html = _render_stats(stats)
     positions_html = _render_positions(positions)
@@ -378,27 +377,19 @@ def render_dashboard(
     </div>
   </div>
 
-  <!-- Symbol P&L comparison -->
-  <div class="card" style="margin-bottom:1.2rem">
-    <h2>심볼별 손익 비교</h2>
-    <div class="chart-wrap" id="symbol-pnl-wrap">
-      {symbol_pnl_svg}
-    </div>
-  </div>
-
-  <!-- Tabs: Positions / Buy / Sell -->
+  <!-- Tabs: Sell / Buy / Positions -->
   <div class="card">
     <div class="trade-filters" id="trade-filters">
       {trade_filter_bar_html}
     </div>
     <div class="tabs">
-      <button class="tab active" onclick="switchTab('positions',this)">오픈 포지션 ({len(positions)})</button>
+      <button class="tab active" onclick="switchTab('sells',this)">매도 이력 ({len(trades)})</button>
       <button class="tab" onclick="switchTab('buys',this)">매수 이력 ({len(trades)})</button>
-      <button class="tab" onclick="switchTab('sells',this)">매도 이력 ({len(trades)})</button>
+      <button class="tab" onclick="switchTab('positions',this)">오픈 포지션 ({len(positions)})</button>
     </div>
-    <div id="tab-positions" class="tab-panel active">{positions_html}</div>
+    <div id="tab-sells" class="tab-panel active">{sell_html}</div>
     <div id="tab-buys" class="tab-panel">{buy_html}</div>
-    <div id="tab-sells" class="tab-panel">{sell_html}</div>
+    <div id="tab-positions" class="tab-panel">{positions_html}</div>
   </div>
 
 </main>
@@ -453,10 +444,9 @@ async function refresh() {{
     _lastTrades = trades || [];
     _populateSymbolFilter(_lastTrades);
     applyTradeFilters();
-    renderSymbolPnl(_lastTrades);
     // Update positions tab count (buy/sell 탭 카운트는 applyTradeFilters()가 갱신)
     const mainTabs = document.querySelectorAll('.tabs .tab');
-    if (mainTabs[0]) mainTabs[0].textContent = `오픈 포지션 (${{(pos||[]).length}})`;
+    if (mainTabs[2]) mainTabs[2].textContent = `오픈 포지션 (${{(pos||[]).length}})`;
   }} catch(e) {{ console.warn('Refresh failed', e); }}
 }}
 function renderStrategy(s) {{
@@ -617,13 +607,22 @@ function renderPnl(pnl) {{
   const el = document.getElementById('pnl-card');
   if (!el) return;
   const cash = pnl.cash || 0;
+  const coinValue = pnl.coin_value || 0;
+  const totalBalance = pnl.total_balance || 0;
+  const realizedToday = pnl.realized_pnl_today || 0;
   const realized = pnl.realized_pnl || 0;
   const unrealized = pnl.unrealized_pnl || 0;
+  const initialCash = pnl.initial_cash || 0;
+  const totalReturn = pnl.total_return || 0;
+  const totalReturnPct = pnl.total_return_pct || 0;
   const fmtKRW = v => '₩' + Math.round(Math.abs(v)).toLocaleString('ko-KR');
   const fmtSigned = v => {{
     const c = v>=0?'win':'loss'; const s=v>=0?'+':'-';
     return `<span class="${{c}}" style="font-size:var(--fs-5);font-weight:var(--fw-strong)">${{s}}${{fmtKRW(v)}}</span>`;
   }};
+  const fmtSignedSmall = v => (v>=0?'+':'-') + fmtKRW(v);
+  const retCls = totalReturn>=0?'win':'loss';
+  const retSign = totalReturn>=0?'+':'-';
   el.innerHTML = `
     <h2>포트폴리오</h2>
     <div class="pnl-grid">
@@ -632,12 +631,26 @@ function renderPnl(pnl) {{
         <div class="lbl">현금 잔고</div>
       </div>
       <div class="stat-box">
-        <div class="val">${{fmtSigned(realized)}}</div>
-        <div class="lbl">실현 손익</div>
+        <div class="val" style="font-size:var(--fs-5);color:var(--accent)">${{fmtKRW(coinValue)}}</div>
+        <div class="lbl">코인 보유 잔고</div>
+      </div>
+      <div class="stat-box" style="background:var(--accent-bg);border:1px solid var(--accent)">
+        <div class="val" style="font-size:var(--fs-6);color:var(--text-strong)">${{fmtKRW(totalBalance)}}</div>
+        <div class="lbl">총 합산 잔고</div>
+      </div>
+      <div class="stat-box">
+        <div class="val">${{fmtSigned(realizedToday)}}</div>
+        <div class="lbl">금일 실현 손익</div>
+        <div class="lbl" style="margin-top:.2rem">누적 ${{fmtSignedSmall(realized)}}</div>
       </div>
       <div class="stat-box">
         <div class="val">${{fmtSigned(unrealized)}}</div>
         <div class="lbl">미실현 손익</div>
+      </div>
+      <div class="stat-box">
+        <div class="val ${{retCls}}" style="font-size:var(--fs-5);font-weight:var(--fw-strong)">${{retSign}}${{fmtKRW(totalReturn)}} (${{retSign}}${{Math.abs(totalReturnPct).toFixed(1)}}%)</div>
+        <div class="lbl">누적 수익률</div>
+        <div class="lbl" style="margin-top:.2rem">최초 입금 ${{fmtKRW(initialCash)}} 대비</div>
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.75rem">
@@ -948,10 +961,9 @@ async function refreshPositionsTrades() {{
     _lastTrades = trades || [];
     _populateSymbolFilter(_lastTrades);
     applyTradeFilters();
-    renderSymbolPnl(_lastTrades);
     renderPnl(pnl);
     const mainTabs = document.querySelectorAll('.tabs .tab');
-    if (mainTabs[0]) mainTabs[0].textContent = `오픈 포지션 (${{(pos||[]).length}})`;
+    if (mainTabs[2]) mainTabs[2].textContent = `오픈 포지션 (${{(pos||[]).length}})`;
   }} catch(e) {{ /* silent */ }}
 }}
 // 기간(전체/7일/30일/90일) · 종목 · 승패 필터 — 이미 불러온 _lastTrades 배열 안에서만 필터링(서버 재요청 없음)
@@ -994,8 +1006,8 @@ function applyTradeFilters() {{
   renderBuyHistory(filtered);
   renderSellHistory(filtered);
   const mainTabs = document.querySelectorAll('.tabs .tab');
+  if (mainTabs[0]) mainTabs[0].textContent = `매도 이력 (${{filtered.length}})`;
   if (mainTabs[1]) mainTabs[1].textContent = `매수 이력 (${{filtered.length}})`;
-  if (mainTabs[2]) mainTabs[2].textContent = `매도 이력 (${{filtered.length}})`;
 }}
 function renderBuyHistory(trades) {{
   const el = document.getElementById('tab-buys');
@@ -1184,12 +1196,13 @@ function renderEquity(pts) {{
     }}
   }});
 
-  // 월 제목 + 월 합계 (오늘까지의 일별 손익 합산)
+  // 월 제목 + 월 합계 (오늘까지의 일별 손익 합산) — 모바일에서 가로 스크롤 없이
+  // 바로 보이도록 좌측 상단에 세로로 쌓는다(우측 상단 배치였던 이전 레이아웃에서 변경).
   const totalPnl = allDates.filter(d => d <= todayStr).reduce((s, d) => s + dailyByDate[d], 0);
   const totalSign = totalPnl >= 0 ? '+' : '';
   const totalColor = totalPnl >= 0 ? 'var(--chart-buy)' : 'var(--chart-sell)';
   svgParts.push(`<text x="${{padL}}" y="20" fill="var(--text-muted)" font-size="12" font-family="system-ui,sans-serif">${{yyyy}}년 ${{parseInt(mm)}}월 일별 손익</text>`);
-  svgParts.push(`<text x="${{W-padR}}" y="26" fill="${{totalColor}}" font-size="20" text-anchor="end" font-weight="700" font-family="system-ui,sans-serif">${{totalSign}}₩${{Math.round(totalPnl).toLocaleString('ko-KR')}}</text>`);
+  svgParts.push(`<text x="${{padL}}" y="40" fill="${{totalColor}}" font-size="20" text-anchor="start" font-weight="700" font-family="system-ui,sans-serif">${{totalSign}}₩${{Math.round(totalPnl).toLocaleString('ko-KR')}}</text>`);
 
   wrap.innerHTML = `<svg viewBox="0 0 ${{W}} ${{H}}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto">${{svgParts.join('')}}</svg>`;
 }}
@@ -1368,13 +1381,19 @@ setInterval(refreshPositionsTrades, 5000);
 
 def _render_pnl(pnl: dict) -> str:
     """Mirrors renderPnl() in the client-side JS below (same dual server+client
-    render pattern used elsewhere) — .pnl-grid 3박스 + 일시정지/재개 버튼까지
+    render pattern used elsewhere) — .pnl-grid 6박스 + 일시정지/재개 버튼까지
     JS와 마크업이 같아야 최초 로드 후 refresh() 시점에 레이아웃이 바뀌는
     깜빡임이 생기지 않는다.
     """
     cash = pnl.get("cash", 0.0)
+    coin_value = pnl.get("coin_value", 0.0)
+    total_balance = pnl.get("total_balance", 0.0)
+    realized_today = pnl.get("realized_pnl_today", 0.0)
     realized = pnl.get("realized_pnl", 0.0)
     unrealized = pnl.get("unrealized_pnl", 0.0)
+    initial_cash = pnl.get("initial_cash", 0.0)
+    total_return = pnl.get("total_return", 0.0)
+    total_return_pct = pnl.get("total_return_pct", 0.0)
 
     def fmt_krw(v: float) -> str:
         return f"₩{round(abs(v)):,}"
@@ -1387,6 +1406,13 @@ def _render_pnl(pnl: dict) -> str:
             f"{sign}{fmt_krw(v)}</span>"
         )
 
+    def fmt_signed_small(v: float) -> str:
+        sign = "+" if v >= 0 else "-"
+        return f"{sign}{fmt_krw(v)}"
+
+    ret_cls = "win" if total_return >= 0 else "loss"
+    ret_sign = "+" if total_return >= 0 else "-"
+
     return f"""<div class="card" id="pnl-card">
       <h2>포트폴리오</h2>
       <div class="pnl-grid">
@@ -1395,12 +1421,26 @@ def _render_pnl(pnl: dict) -> str:
           <div class="lbl">현금 잔고</div>
         </div>
         <div class="stat-box">
-          <div class="val">{fmt_signed(realized)}</div>
-          <div class="lbl">실현 손익</div>
+          <div class="val" style="font-size:var(--fs-5);color:var(--accent)">{fmt_krw(coin_value)}</div>
+          <div class="lbl">코인 보유 잔고</div>
+        </div>
+        <div class="stat-box" style="background:var(--accent-bg);border:1px solid var(--accent)">
+          <div class="val" style="font-size:var(--fs-6);color:var(--text-strong)">{fmt_krw(total_balance)}</div>
+          <div class="lbl">총 합산 잔고</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">{fmt_signed(realized_today)}</div>
+          <div class="lbl">금일 실현 손익</div>
+          <div class="lbl" style="margin-top:.2rem">누적 {fmt_signed_small(realized)}</div>
         </div>
         <div class="stat-box">
           <div class="val">{fmt_signed(unrealized)}</div>
           <div class="lbl">미실현 손익</div>
+        </div>
+        <div class="stat-box">
+          <div class="val {ret_cls}" style="font-size:var(--fs-5);font-weight:var(--fw-strong)">{ret_sign}{fmt_krw(total_return)} ({ret_sign}{abs(total_return_pct):.1f}%)</div>
+          <div class="lbl">누적 수익률</div>
+          <div class="lbl" style="margin-top:.2rem">최초 입금 {fmt_krw(initial_cash)} 대비</div>
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.75rem">
@@ -1658,7 +1698,8 @@ def _render_equity_svg(equity: list[dict]) -> str:
                 f'font-family="system-ui,sans-serif">{day_num}일</text>'
             )
 
-    # 헤더: 월 제목 (좌, 절제된 캡션) + 누적 합계 (우, 헤드라인 숫자)
+    # 헤더: 월 제목 (좌상단 1줄) + 누적 합계 (좌상단 2줄, 헤드라인 숫자) — 모바일에서
+    # 가로 스크롤 없이도 합계가 바로 보이도록 우측 상단 대신 좌측에 세로로 쌓는다.
     total = sum(daily.get(d, 0.0) for d in all_dates if d <= today_str)
     total_color = "var(--chart-buy)" if total >= 0 else "var(--chart-sell)"
     sign_ch = "+" if total >= 0 else ""
@@ -1668,8 +1709,8 @@ def _render_equity_svg(equity: list[dict]) -> str:
         f'font-family="system-ui,sans-serif">{year}년 {mon}월 일별 손익</text>'
     )
     parts.append(
-        f'<text x="{W - pad_r}" y="32" fill="{total_color}" font-size="26" '
-        f'text-anchor="end" font-weight="800" font-family="system-ui,sans-serif">'
+        f'<text x="{pad_l}" y="42" fill="{total_color}" font-size="22" '
+        f'text-anchor="start" font-weight="800" font-family="system-ui,sans-serif">'
         f'{sign_ch}₩{round(total):,}</text>'
     )
     parts.append("</svg>")

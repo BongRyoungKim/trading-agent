@@ -487,18 +487,17 @@ class TestRenderDashboard:
         )
         assert '<option value="ETH/KRW">ETH/KRW</option>' in html
 
-    def test_html_symbol_pnl_chart_present(self) -> None:
+    def test_html_symbol_pnl_section_removed_from_dashboard(self) -> None:
+        """'심볼별 손익 비교' 카드는 대시보드에서 제거됐다 — 데이터 재사용을 위해
+        _render_symbol_pnl_svg()와 클라이언트 renderSymbolPnl() 함수 자체는 죽은
+        코드로 남겨두되(별도로 직접 테스트됨), 페이지에는 더 이상 노출되지 않는다."""
         trades = [self._trade(symbol="BTC/KRW", pnl=100_000.0), self._trade(symbol="ETH/KRW", pnl=-50_000.0)]
         html = render_dashboard(self._status(), [], {}, trades=trades)
-        assert "심볼별 손익 비교" in html
-        assert 'id="symbol-pnl-wrap"' in html
+        assert "심볼별 손익 비교" not in html
+        assert 'id="symbol-pnl-wrap"' not in html
+        # 호출부만 제거되고 함수 정의 자체는 재사용을 위해 남아있어야 한다
         assert "function renderSymbolPnl(trades)" in html
-        assert "<svg" in html  # chart actually rendered, not just empty-state text
-
-    def test_html_symbol_pnl_chart_empty_state(self) -> None:
-        html = render_dashboard(self._status(), [], {}, trades=[])
-        assert "심볼별 손익 비교" in html
-        assert "거래 없음" in html
+        assert "renderSymbolPnl(_lastTrades)" not in html
 
     def test_html_theme_toggle_present(self) -> None:
         html = render_dashboard(self._status(), [], {})
@@ -650,7 +649,7 @@ class TestRenderDashboard:
         assert "거래 없음" in html
 
     def test_html_pnl_card_matches_js_structure(self) -> None:
-        """포트폴리오 카드는 renderPnl()(JS)과 동일하게 .pnl-grid 3박스 +
+        """포트폴리오 카드는 renderPnl()(JS)과 동일하게 .pnl-grid 6박스 +
         일시정지/재개 버튼을 최초 로드(SSR)부터 포함해야 한다."""
         html = render_dashboard(
             self._status(), [], {"cash": 9500.0, "realized_pnl": -500.0, "unrealized_pnl": 100.0},
@@ -658,6 +657,64 @@ class TestRenderDashboard:
         assert 'class="pnl-grid"' in html
         assert 'class="btn-pause"' in html
         assert 'class="btn-resume"' in html
+
+    def test_html_portfolio_card_shows_six_expanded_boxes(self) -> None:
+        """포트폴리오 카드가 신규 필드(코인 보유 잔고/총 합산 잔고/금일 실현
+        손익/누적 수익률)까지 6박스로 확장되어 노출되는지 확인한다."""
+        pnl = {
+            "cash": 1_000_000.0,
+            "realized_pnl": 50_000.0,
+            "realized_pnl_today": 20_000.0,
+            "unrealized_pnl": 5_000.0,
+            "open_positions": 1,
+            "coin_value": 300_000.0,
+            "total_balance": 1_300_000.0,
+            "initial_cash": 1_000_000.0,
+            "total_return": 300_000.0,
+            "total_return_pct": 30.0,
+        }
+        html = render_dashboard(self._status(), [], pnl)
+        assert "코인 보유 잔고" in html
+        assert "총 합산 잔고" in html
+        assert "금일 실현 손익" in html
+        assert "미실현 손익" in html
+        assert "누적 수익률" in html
+        assert "₩1,000,000" in html  # 현금 잔고
+        assert "₩300,000" in html  # 코인 보유 잔고
+        assert "₩1,300,000" in html  # 총 합산 잔고
+        assert "+₩20,000" in html  # 금일 실현 손익
+        assert "누적 +₩50,000" in html  # 보조 텍스트(전체 누적 실현 손익)
+        assert "+30.0%" in html  # 누적 수익률 %
+
+    def test_html_portfolio_card_defaults_missing_new_fields_to_zero(self) -> None:
+        """새 필드가 없는 pnl dict(예: 구 테스트/다른 호출부)가 와도 KeyError 없이
+        0으로 폴백해야 한다."""
+        html = render_dashboard(
+            self._status(), [], {"cash": 9500.0, "realized_pnl": -500.0, "unrealized_pnl": 100.0},
+        )
+        assert "₩9,500" in html
+        assert "-₩500" in html  # 누적 실현손익 보조 텍스트에 그대로 남아있어야 함
+
+    # ── 탭 순서 회귀 테스트 (매도이력 → 매수이력 → 오픈포지션) ─────────────
+
+    def test_html_tabs_order_is_sell_buy_positions(self) -> None:
+        """탭 버튼 순서가 매도이력 → 매수이력 → 오픈포지션이어야 하고, 매도이력이
+        기본 활성 탭이어야 한다(진입 즉시 매수이력에 뜨므로, 매도이력을 먼저 본다)."""
+        html = render_dashboard(self._status(), [], {})
+        idx_sell_btn = html.index("onclick=\"switchTab('sells',this)\"")
+        idx_buy_btn = html.index("onclick=\"switchTab('buys',this)\"")
+        idx_pos_btn = html.index("onclick=\"switchTab('positions',this)\"")
+        assert idx_sell_btn < idx_buy_btn < idx_pos_btn
+        assert '<button class="tab active" onclick="switchTab(\'sells\',this)"' in html
+        assert '<div id="tab-sells" class="tab-panel active">' in html
+
+    def test_html_tabs_index_based_js_references_match_new_order(self) -> None:
+        """mainTabs[0]/[1]/[2] 인덱스 참조가 새 DOM 순서(매도/매수/포지션)와
+        일치하는지 확인한다 — 탭 이름과 실제 갱신 대상이 어긋나는 회귀 방지."""
+        html = render_dashboard(self._status(), [], {})
+        assert "if (mainTabs[0]) mainTabs[0].textContent = `매도 이력" in html
+        assert "if (mainTabs[1]) mainTabs[1].textContent = `매수 이력" in html
+        assert "if (mainTabs[2]) mainTabs[2].textContent = `오픈 포지션" in html
 
     # ── 차트 회귀 테스트 (실거래 규모: 30일치 일별 손익 / 8개 심볼) ─────────
     # 더미 2~3개 막대로만 검증해서 실거래 규모에서 라벨이 겹치는 문제를
@@ -700,8 +757,23 @@ class TestRenderDashboard:
         assert len(xs) >= last_day // 3, "라벨이 너무 적게 표시됨(과도한 생략)"
         for a, b in zip(xs, xs[1:]):
             assert b - a >= 10, "라벨끼리 겹치거나 너무 붙어 보임"
-        # 우측 상단 합계(월 누적)는 항상 정확한 자릿수로 보여야 한다
-        assert 'text-anchor="end" font-weight="800"' in svg
+        # 좌측 상단 합계(월 누적, 모바일에서 스크롤 없이 바로 보이도록 좌측 배치)는
+        # 항상 정확한 자릿수로 보여야 한다
+        assert 'text-anchor="start" font-weight="800"' in svg
+
+    def test_html_equity_chart_total_label_anchored_top_left(self) -> None:
+        """누적 합계 라벨이 우측상단이 아니라 월 제목과 같은 좌측 x좌표에 그려져야
+        한다 — 모바일 좁은 화면(가로 스크롤 chart-wrap)에서 스크롤 없이 바로
+        보이게 하려는 변경."""
+        import re
+        from datetime import date
+
+        today = date.today()
+        equity = [{"time": f"{today.isoformat()}T00:00:00", "pnl": 1000.0}]
+        svg = _render_equity_svg(equity)
+        title_x = re.search(r'<text x="([\d.]+)" y="20" fill="var\(--text-muted\)"', svg).group(1)
+        total_x = re.search(r'<text x="([\d.]+)" y="[\d.]+" fill="var\(--chart-buy\)" font-size="22"', svg).group(1)
+        assert title_x == total_x, "합계 라벨이 월 제목과 같은 좌측 x좌표에 있어야 한다"
 
     def test_html_equity_chart_axis_and_total_keep_full_precision(self) -> None:
         """축 눈금·합계처럼 개수가 적은 곳은 만/억 축약 없이 정확한 전체 자릿수를
