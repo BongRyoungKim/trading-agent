@@ -261,6 +261,80 @@ class TestDashboardState:
         state.resume()
         eng.resume.assert_called_once()
 
+    def test_get_symbol_display_names_empty_without_engine(self) -> None:
+        state = self._state()
+        assert state.get_symbol_display_names() == {}
+
+    def test_get_symbol_display_names_uses_korean_name(self) -> None:
+        state = self._state()
+        eng = self._mock_engine()
+        ccxt_client = MagicMock()
+        ccxt_client.markets = {
+            "BTC/KRW": {"info": {"korean_name": "비트코인"}},
+            "ETH/KRW": {"info": {"korean_name": "이더리움"}},
+        }
+        eng._exchange._exchange = ccxt_client  # noqa: SLF001
+        state.register_engine(eng)
+
+        names = state.get_symbol_display_names()
+        assert names == {"BTC/KRW": "비트코인 (BTC)", "ETH/KRW": "이더리움 (ETH)"}
+
+    def test_get_symbol_display_names_falls_back_without_korean_name(self) -> None:
+        state = self._state()
+        eng = self._mock_engine()
+        ccxt_client = MagicMock()
+        ccxt_client.markets = {
+            "XRP/KRW": {"info": {}},
+            "DOGE/KRW": {},
+        }
+        eng._exchange._exchange = ccxt_client  # noqa: SLF001
+        state.register_engine(eng)
+
+        names = state.get_symbol_display_names()
+        assert names == {"XRP/KRW": "XRP", "DOGE/KRW": "DOGE"}
+
+    def test_get_symbol_display_names_loads_markets_when_not_cached(self) -> None:
+        state = self._state()
+        eng = self._mock_engine()
+        ccxt_client = MagicMock()
+        ccxt_client.markets = {}
+
+        def _load_markets():
+            ccxt_client.markets = {"BTC/KRW": {"info": {"korean_name": "비트코인"}}}
+
+        ccxt_client.load_markets.side_effect = _load_markets
+        eng._exchange._exchange = ccxt_client  # noqa: SLF001
+        state.register_engine(eng)
+
+        names = state.get_symbol_display_names()
+        ccxt_client.load_markets.assert_called_once()
+        assert names == {"BTC/KRW": "비트코인 (BTC)"}
+
+    def test_get_symbol_display_names_ignores_non_krw_markets(self) -> None:
+        state = self._state()
+        eng = self._mock_engine()
+        ccxt_client = MagicMock()
+        ccxt_client.markets = {
+            "BTC/KRW": {"info": {"korean_name": "비트코인"}},
+            "BTC/USDT": {"info": {"korean_name": "비트코인"}},
+        }
+        eng._exchange._exchange = ccxt_client  # noqa: SLF001
+        state.register_engine(eng)
+
+        names = state.get_symbol_display_names()
+        assert names == {"BTC/KRW": "비트코인 (BTC)"}
+
+    def test_get_symbol_display_names_returns_empty_on_exchange_error(self) -> None:
+        state = self._state()
+        eng = self._mock_engine()
+        ccxt_client = MagicMock()
+        ccxt_client.markets = {}
+        ccxt_client.load_markets.side_effect = RuntimeError("boom")
+        eng._exchange._exchange = ccxt_client  # noqa: SLF001
+        state.register_engine(eng)
+
+        assert state.get_symbol_display_names() == {}
+
     def test_pause_noop_without_engine(self) -> None:
         """Should not raise if no engine is registered."""
         state = self._state()
@@ -898,6 +972,11 @@ class TestFastAPIRoutes:
         resp = client.post("/api/engine/pause")
         assert resp.status_code == 200
         eng.pause.assert_called_once()
+
+    def test_get_symbol_names_returns_dict(self, client) -> None:
+        resp = client.get("/api/symbol-names")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), dict)
 
     def test_get_trades_returns_list(self, client) -> None:
         resp = client.get("/api/trades")

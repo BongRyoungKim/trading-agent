@@ -336,6 +336,37 @@ class DashboardState:
         except Exception:  # noqa: BLE001
             return []
 
+    def get_symbol_display_names(self) -> dict[str, str]:
+        """Return a mapping of KRW market symbols to Korean display labels.
+
+        e.g. {"BTC/KRW": "비트코인 (BTC)", ...}. Upbit's ccxt market metadata
+        already carries the Korean name in market["info"]["korean_name"], so
+        no hardcoded coin-name table is needed. Falls back to the bare base
+        ticker (e.g. "BTC") when korean_name is missing, and to an empty dict
+        on any failure (no engine, exchange access error) — this must never
+        raise or break the caller.
+        """
+        eng = self.engine
+        if eng is None:
+            return {}
+        try:
+            ccxt_client = eng._exchange._exchange  # noqa: SLF001
+            if not ccxt_client.markets:
+                ccxt_client.load_markets()
+            result: dict[str, str] = {}
+            for symbol, market in ccxt_client.markets.items():
+                if not symbol.endswith("/KRW"):
+                    continue
+                base = symbol.split("/")[0]
+                try:
+                    korean_name = (market.get("info") or {}).get("korean_name")
+                except Exception:  # noqa: BLE001
+                    korean_name = None
+                result[symbol] = f"{korean_name} ({base})" if korean_name else base
+            return result
+        except Exception:  # noqa: BLE001
+            return {}
+
     def get_pending_param_change(self) -> dict:
         """
         Combines the auto-tuner's proposed change (src.config.live_params.

@@ -7,6 +7,7 @@ Exposes:
   GET  /api/positions       — Open positions (JSON)
   GET  /api/pnl             — Portfolio PnL summary (JSON)
   GET  /api/trades          — Recent closed trades (JSON, limit param)
+  GET  /api/symbol-names    — Korean display label per KRW market symbol (JSON)
   GET  /api/stats           — Journal statistics (JSON)
   GET  /api/equity          — Cumulative PnL curve (JSON)
   POST /api/engine/pause    — Pause trading
@@ -54,6 +55,12 @@ async def dashboard() -> str:
 @app.get("/api/balance")
 async def get_balance() -> JSONResponse:
     return JSONResponse(get_dashboard_state().get_balance())
+
+
+@app.get("/api/symbol-names")
+async def get_symbol_names() -> JSONResponse:
+    """Korean display label per KRW market symbol, e.g. {"BTC/KRW": "비트코인 (BTC)"}."""
+    return JSONResponse(get_dashboard_state().get_symbol_display_names())
 
 
 @app.get("/api/strategy")
