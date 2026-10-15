@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import queue
 import threading
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from src.config import live_params as lp
@@ -82,6 +83,20 @@ class DashboardState:
             "trading_days": eng.market_hours.trading_days if eng.market_hours.enabled else "all",
         }
 
+    @staticmethod
+    def _resolve_current_price(sym: str, pos, latest_ticks: dict) -> float:
+        """Return the latest known price for a position.
+
+        Uses the tick cache (already fetched by the engine; avoids rate-limit
+        hits), falling back to entry_price if no tick is available yet.
+        """
+        tick = latest_ticks.get(sym, {})
+        tick_price = (tick.get("metadata") or {}).get("price")
+        try:
+            return float(tick_price) if tick_price is not None else float(pos.entry_price)
+        except Exception:  # noqa: BLE001
+            return float(pos.entry_price)
+
     def get_positions(self) -> list[dict]:
         eng = self.engine
         if eng is None:
@@ -92,14 +107,7 @@ class DashboardState:
             pos = eng._portfolio.get_position(sym)
             if pos is None:
                 continue
-            # Use price from latest tick cache (already fetched by engine; avoids rate-limit hits).
-            # Fall back to entry_price if tick not yet available.
-            tick = latest_ticks.get(sym, {})
-            tick_price = (tick.get("metadata") or {}).get("price")
-            try:
-                current_price = float(tick_price) if tick_price is not None else float(pos.entry_price)
-            except Exception:  # noqa: BLE001
-                current_price = float(pos.entry_price)
+            current_price = self._resolve_current_price(sym, pos, latest_ticks)
             entry = float(pos.entry_price)
             amount = float(pos.amount)
             unrealized_pnl = (current_price - entry) * amount
@@ -124,11 +132,46 @@ class DashboardState:
         if eng is None:
             return {}
         report = eng._portfolio.pnl_report()  # noqa: SLF001
+        latest_ticks: dict = getattr(eng, "_latest_ticks", {})  # noqa: SLF001
+        coin_value = 0.0
+        unrealized_pnl = 0.0
+        for sym in eng._portfolio.open_symbols():  # noqa: SLF001
+            pos = eng._portfolio.get_position(sym)  # noqa: SLF001
+            if pos is None:
+                continue
+            current_price = self._resolve_current_price(sym, pos, latest_ticks)
+            entry = float(pos.entry_price)
+            amount = float(pos.amount)
+            coin_value += current_price * amount
+            # pnl_report()의 unrealized_pnl은 prices 인자 없이 호출돼 항상 0이 되는
+            # 기존 버그가 있다(prices={} 디폴트 → entry_price로 폴백). get_positions()와
+            # 동일한 틱 캐시 기반 현재가로 직접 계산해 그 값을 대체한다.
+            unrealized_pnl += (current_price - entry) * amount
+
+        cash = float(report["cash"])
+        total_balance = cash + coin_value
+        initial_cash = float(eng._portfolio.initial_cash)  # noqa: SLF001
+        total_return = total_balance - initial_cash
+        total_return_pct = (total_return / initial_cash * 100) if initial_cash else 0.0
+
+        today_start_kst = datetime.now(lp.KST).replace(hour=0, minute=0, second=0, microsecond=0)
+        realized_pnl_today = sum(
+            float(t.pnl)
+            for t in eng.journal.trades  # noqa: SLF001
+            if t.exit_time.astimezone(lp.KST) >= today_start_kst
+        )
+
         return {
-            "cash": float(report["cash"]),
+            "cash": cash,
             "realized_pnl": float(report["realized_pnl"]),
-            "unrealized_pnl": float(report.get("unrealized_pnl", 0)),
+            "realized_pnl_today": round(realized_pnl_today, 2),
+            "unrealized_pnl": round(unrealized_pnl, 2),
             "open_positions": report["open_positions"],
+            "coin_value": round(coin_value, 2),
+            "total_balance": round(total_balance, 2),
+            "initial_cash": initial_cash,
+            "total_return": round(total_return, 2),
+            "total_return_pct": round(total_return_pct, 2),
         }
 
     def get_trades(self, limit: int = 50) -> list[dict]:

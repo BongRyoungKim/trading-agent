@@ -64,6 +64,19 @@ class TestPortfolioTracker:
         tracker = _make_tracker(10000.0)
         assert tracker.cash == Decimal("10000")
 
+    def test_initial_cash_property_preserved(self) -> None:
+        """initial_cash는 최초 입금액을 그대로 보존해야 한다(불변)."""
+        tracker = _make_tracker(10000.0)
+        assert tracker.initial_cash == Decimal("10000")
+
+    def test_initial_cash_property_unaffected_by_trading(self) -> None:
+        """포지션 진입/청산으로 cash는 변해도 initial_cash는 그대로여야 한다."""
+        tracker = _make_tracker(10000.0)
+        tracker.open_position("BTC/USDT", "buy", Decimal("0.1"), Decimal("50000"))
+        tracker.close_position("BTC/USDT", Decimal("55000"))
+        assert tracker.cash != Decimal("10000")
+        assert tracker.initial_cash == Decimal("10000")
+
     def test_open_position_deducts_cash(self) -> None:
         tracker = _make_tracker(10000.0)
         tracker.open_position("BTC/USDT", "buy", Decimal("0.1"), Decimal("50000"))

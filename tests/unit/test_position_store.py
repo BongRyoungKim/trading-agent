@@ -229,6 +229,8 @@ class TestTrackerWithStore:
         s2 = SQLitePositionStore(db_path=db)
         t2 = PortfolioTracker.from_store(initial_cash=Decimal("100000"), store=s2)
         assert t2.cash == Decimal("99500")
+        # initial_cash은 "최초 입금액"이므로 복원된 포지션 원가로 깎이면 안 된다.
+        assert t2.initial_cash == Decimal("100000")
 
     def test_from_store_no_positions_full_cash(self, tmp_path):
         db = tmp_path / "pos.db"

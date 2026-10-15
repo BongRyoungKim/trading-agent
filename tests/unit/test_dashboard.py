@@ -28,6 +28,7 @@ class TestDashboardState:
         mh.trading_days = "mon-sun"
         eng.market_hours = mh
         # Portfolio mock
+        from decimal import Decimal
         portfolio = MagicMock()
         portfolio.pnl_report.return_value = {
             "cash": 10000.0,
@@ -35,7 +36,9 @@ class TestDashboardState:
             "open_positions": 0,
         }
         portfolio.open_symbols.return_value = []
+        portfolio.initial_cash = Decimal("10000.0")
         eng._portfolio = portfolio  # noqa: SLF001
+        eng.journal.trades = []
         return eng
 
     def test_get_status_no_engine_returns_not_ready(self) -> None:
@@ -114,6 +117,135 @@ class TestDashboardState:
         pnl = state.get_pnl()
         assert "cash" in pnl
         assert pnl["cash"] == 10000.0
+
+    def test_get_pnl_preserves_legacy_keys(self) -> None:
+        """기존 키(cash/realized_pnl/unrealized_pnl/open_positions)는 하위호환을
+        위해 그대로 남아 있어야 한다."""
+        state = self._state()
+        state.register_engine(self._mock_engine())
+        pnl = state.get_pnl()
+        for key in ("cash", "realized_pnl", "unrealized_pnl", "open_positions"):
+            assert key in pnl
+
+    def test_get_pnl_no_open_positions_coin_value_zero(self) -> None:
+        state = self._state()
+        state.register_engine(self._mock_engine())
+        pnl = state.get_pnl()
+        assert pnl["coin_value"] == 0.0
+        assert pnl["total_balance"] == pnl["cash"]
+
+    def test_get_pnl_coin_value_sums_open_position_market_value(self) -> None:
+        from datetime import UTC, datetime
+        from decimal import Decimal
+
+        state = self._state()
+        eng = self._mock_engine()
+        pos = MagicMock()
+        pos.symbol = "BTC/USDT"
+        pos.side = "buy"
+        pos.amount = Decimal("0.1")
+        pos.entry_price = Decimal("50000")
+        pos.entry_time = datetime(2024, 1, 1, tzinfo=UTC)
+        pos.stop_loss = None
+        pos.take_profit = None
+        pos.highest_price = None
+        eng._portfolio.open_symbols.return_value = ["BTC/USDT"]  # noqa: SLF001
+        eng._portfolio.get_position.return_value = pos  # noqa: SLF001
+        eng._latest_ticks = {"BTC/USDT": {"metadata": {"price": 52000.0}}}  # noqa: SLF001
+        state.register_engine(eng)
+
+        pnl = state.get_pnl()
+        # coin_value = current_price(52000) * amount(0.1) = 5200
+        assert pnl["coin_value"] == pytest.approx(5200.0)
+        assert pnl["total_balance"] == pytest.approx(pnl["cash"] + 5200.0)
+        # unrealized_pnl = (52000-50000) * 0.1 = 200
+        assert pnl["unrealized_pnl"] == pytest.approx(200.0)
+
+    def test_get_pnl_unrealized_pnl_not_zeroed_by_pnl_report_bug(self) -> None:
+        """pnl_report()는 prices 인자 없이 호출돼 unrealized_pnl이 항상 0으로 깨지는
+        기존 버그가 있다. get_pnl()은 그 깨진 값을 쓰지 않고 틱 캐시 기반 현재가로
+        직접 재계산해야 한다 — pnl_report()가 0을 반환해도 결과는 0이 아니어야 함."""
+        from datetime import UTC, datetime
+        from decimal import Decimal
+
+        state = self._state()
+        eng = self._mock_engine()
+        eng._portfolio.pnl_report.return_value = {  # noqa: SLF001
+            "cash": 10000.0,
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,  # pnl_report()는 항상 0을 반환(버그)
+            "open_positions": 1,
+        }
+        pos = MagicMock()
+        pos.symbol = "BTC/USDT"
+        pos.side = "buy"
+        pos.amount = Decimal("0.1")
+        pos.entry_price = Decimal("50000")
+        pos.entry_time = datetime(2024, 1, 1, tzinfo=UTC)
+        pos.stop_loss = None
+        pos.take_profit = None
+        pos.highest_price = None
+        eng._portfolio.open_symbols.return_value = ["BTC/USDT"]  # noqa: SLF001
+        eng._portfolio.get_position.return_value = pos  # noqa: SLF001
+        eng._latest_ticks = {"BTC/USDT": {"metadata": {"price": 45000.0}}}  # noqa: SLF001
+        state.register_engine(eng)
+
+        pnl = state.get_pnl()
+        # (45000-50000) * 0.1 = -500 — pnl_report()의 0이 아니라 실제 손실이 나와야 함
+        assert pnl["unrealized_pnl"] == pytest.approx(-500.0)
+
+    def test_get_pnl_total_return_and_pct(self) -> None:
+        state = self._state()
+        eng = self._mock_engine()
+        eng._portfolio.pnl_report.return_value = {  # noqa: SLF001
+            "cash": 11000.0,
+            "realized_pnl": 1000.0,
+            "open_positions": 0,
+        }
+        state.register_engine(eng)
+
+        pnl = state.get_pnl()
+        assert pnl["initial_cash"] == pytest.approx(10000.0)
+        assert pnl["total_return"] == pytest.approx(1000.0)
+        assert pnl["total_return_pct"] == pytest.approx(10.0)
+
+    def test_get_pnl_total_return_pct_zero_when_initial_cash_zero(self) -> None:
+        from decimal import Decimal
+
+        state = self._state()
+        eng = self._mock_engine()
+        eng._portfolio.initial_cash = Decimal("0")  # noqa: SLF001
+        state.register_engine(eng)
+
+        pnl = state.get_pnl()
+        assert pnl["total_return_pct"] == 0.0
+
+    def test_get_pnl_realized_pnl_today_filters_by_kst_date(self) -> None:
+        """금일(KST 자정 기준) 청산된 거래만 realized_pnl_today에 합산되고,
+        어제 청산된 거래는 제외돼야 한다."""
+        from datetime import UTC, datetime, timedelta
+
+        from src.config import live_params as lp
+
+        state = self._state()
+        eng = self._mock_engine()
+
+        today_kst_noon = datetime.now(lp.KST).replace(hour=12, minute=0, second=0, microsecond=0)
+        yesterday_kst_noon = today_kst_noon - timedelta(days=1)
+
+        trade_today = MagicMock()
+        trade_today.pnl = 1234.0
+        trade_today.exit_time = today_kst_noon.astimezone(UTC)
+
+        trade_yesterday = MagicMock()
+        trade_yesterday.pnl = 9999.0
+        trade_yesterday.exit_time = yesterday_kst_noon.astimezone(UTC)
+
+        eng.journal.trades = [trade_yesterday, trade_today]
+        state.register_engine(eng)
+
+        pnl = state.get_pnl()
+        assert pnl["realized_pnl_today"] == pytest.approx(1234.0)
 
     def test_pause_delegates_to_engine(self) -> None:
         state = self._state()

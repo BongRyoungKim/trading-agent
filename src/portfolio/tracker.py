@@ -35,6 +35,7 @@ class PortfolioTracker:
         store: SQLitePositionStore | None = None,
     ) -> None:
         self._cash = initial_cash
+        self._initial_cash = initial_cash
         self._positions: dict[str, Position] = {}
         self._realized_pnl = Decimal("0")
         self._total_commission = Decimal("0")
@@ -300,6 +301,11 @@ class PortfolioTracker:
     @property
     def cash(self) -> Decimal:
         return self._cash
+
+    @property
+    def initial_cash(self) -> Decimal:
+        """Original deposit amount at tracker creation (never mutated)."""
+        return self._initial_cash
 
     @property
     def realized_pnl(self) -> Decimal:
