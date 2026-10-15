@@ -556,10 +556,84 @@ class TestRenderDashboard:
         assert "function _populateSymbolFilter(trades)" in html
 
     def test_html_trade_filter_symbol_options_seeded_from_trades(self) -> None:
+        """value는 필터링용 원본 심볼("ETH/KRW")을 유지하고, 라벨만 symbol_names
+        매핑이 없을 때의 폴백 표기("ETH")로 보여야 한다."""
         html = render_dashboard(
             self._status(), [], {}, trades=[self._trade(symbol="ETH/KRW")]
         )
-        assert '<option value="ETH/KRW">ETH/KRW</option>' in html
+        assert '<option value="ETH/KRW">ETH</option>' in html
+
+    def test_html_trade_filter_symbol_option_uses_korean_display_name(self) -> None:
+        """symbol_names 매핑이 있으면 "한글명 (티커)" 라벨로 표시하되 value는 원본
+        심볼을 유지해야 한다 — 필터링 로직은 value에 의존한다."""
+        html = render_dashboard(
+            self._status(), [], {}, trades=[self._trade(symbol="BTC/KRW")],
+            symbol_names={"BTC/KRW": "비트코인 (BTC)"},
+        )
+        assert '<option value="BTC/KRW">비트코인 (BTC)</option>' in html
+
+    def test_html_trade_filter_period_defaults_to_today(self) -> None:
+        html = render_dashboard(self._status(), [], {}, trades=[self._trade()])
+        assert '<option value="today" selected>오늘</option>' in html
+
+    def test_html_filter_trades_today_uses_kst_calendar_day(self) -> None:
+        """'오늘' 필터는 롤링 24시간이 아니라 KST 달력 기준 당일 00:00부터여야 한다."""
+        html = render_dashboard(self._status(), [], {}, trades=[self._trade()])
+        assert "period === 'today'" in html
+        assert "9 * 3600 * 1000" in html
+
+    def test_html_position_symbol_uses_korean_display_name(self) -> None:
+        positions = [{
+            "symbol": "BTC/KRW",
+            "side": "buy",
+            "amount": 0.01,
+            "entry_price": 50000.0,
+            "stop_loss": 48000.0,
+            "take_profit": None,
+        }]
+        html = render_dashboard(
+            self._status(), positions, {}, symbol_names={"BTC/KRW": "비트코인 (BTC)"},
+        )
+        assert "<code>비트코인 (BTC)</code>" in html
+
+    def test_html_position_symbol_falls_back_to_bare_ticker_without_mapping(self) -> None:
+        positions = [{
+            "symbol": "XRP/KRW",
+            "side": "buy",
+            "amount": 0.01,
+            "entry_price": 500.0,
+            "stop_loss": None,
+            "take_profit": None,
+        }]
+        html = render_dashboard(self._status(), positions, {}, symbol_names={})
+        assert "<code>XRP</code>" in html
+
+    def test_html_sell_history_symbol_uses_korean_display_name(self) -> None:
+        html = render_dashboard(
+            self._status(), [], {}, trades=[self._trade(symbol="BTC/KRW")],
+            symbol_names={"BTC/KRW": "비트코인 (BTC)"},
+        )
+        assert "<code>비트코인 (BTC)</code>" in html
+
+    def test_html_buy_history_symbol_uses_korean_display_name(self) -> None:
+        positions = [{
+            "symbol": "BTC/KRW",
+            "side": "buy",
+            "amount": 0.01,
+            "entry_price": 50_000_000.0,
+            "entry_time": "2026-10-15T09:00:00",
+        }]
+        html = render_dashboard(
+            self._status(), positions, {}, symbol_names={"BTC/KRW": "비트코인 (BTC)"},
+        )
+        assert "<code>비트코인 (BTC)</code>" in html
+
+    def test_html_sym_label_js_helper_present(self) -> None:
+        """클라이언트 JS 측 심볼 라벨 헬퍼(symLabel)와 캐시 변수가 있어야 한다."""
+        html = render_dashboard(self._status(), [], {})
+        assert "function symLabel(sym)" in html
+        assert "_symbolNames" in html
+        assert "/api/symbol-names" in html
 
     def test_html_symbol_pnl_section_removed_from_dashboard(self) -> None:
         """'심볼별 손익 비교' 카드는 대시보드에서 제거됐다 — 데이터 재사용을 위해

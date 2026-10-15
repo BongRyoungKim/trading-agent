@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json as _json
 
+from src.dashboard.state import get_dashboard_state
+
 _ICON_PATHS: dict[str, str] = {
     "bolt": '<path d="M13 3 L6 13 H11 L10 21 L18 10 H13 Z"/>',
     "clipboard": (
@@ -75,6 +77,16 @@ def _fmt_compact_krw(v: float) -> str:
     return f"{sign}₩{round(av):,}"
 
 
+def _symbol_label(sym: str, symbol_names: dict[str, str]) -> str:
+    """"BTC/KRW" → "비트코인 (BTC)" using the backend-provided display-name map.
+
+    Falls back to the bare ticker (symbol with "/KRW" stripped) when the
+    symbol isn't in the mapping — e.g. an unusual/newly-listed market the
+    backend hasn't loaded yet. Mirrors symLabel() in the client-side JS below.
+    """
+    return symbol_names.get(sym, sym.replace("/KRW", ""))
+
+
 def render_dashboard(
     status: dict,
     positions: list[dict],
@@ -85,6 +97,7 @@ def render_dashboard(
     balance: list[dict] | None = None,
     ticks: list[dict] | None = None,
     pending_params: dict | None = None,
+    symbol_names: dict[str, str] | None = None,
 ) -> str:
     trades = trades or []
     stats = stats or {}
@@ -92,6 +105,12 @@ def render_dashboard(
     balance = balance or []
     ticks = ticks or []
     pending_params = pending_params or {"has_pending": False}
+    # app.py's call site doesn't pass this explicitly — the dashboard runs in the
+    # same process as the trading engine, so the singleton already has it loaded
+    # (register_engine() was called at startup) and this is a cheap cached read.
+    symbol_names = (
+        symbol_names if symbol_names is not None else get_dashboard_state().get_symbol_display_names()
+    )
 
     mode = status.get("mode", "unknown").upper()
     paused = status.get("paused", False)
@@ -123,11 +142,11 @@ def render_dashboard(
     hours_info = f"{trading_hours} UTC · {trading_days}"
 
     equity_svg = _render_equity_svg(equity)
-    trade_filter_bar_html = _render_trade_filter_bar(trades)
+    trade_filter_bar_html = _render_trade_filter_bar(trades, symbol_names)
     stats_html = _render_stats(stats)
-    positions_html = _render_positions(positions)
-    buy_html = _render_buy_history(trades, positions)
-    sell_html = _render_sell_history(trades)
+    positions_html = _render_positions(positions, symbol_names)
+    buy_html = _render_buy_history(trades, positions, symbol_names)
+    sell_html = _render_sell_history(trades, symbol_names)
     pnl_html = _render_pnl(pnl)
     pending_params_html = _render_pending_params(pending_params)
     balance_html = _render_balance(balance)
@@ -413,6 +432,12 @@ function switchTab(name, btn) {{
 let _strategyParams = {{}};
 let _positionsMap = {{}};  // symbol → position (entry_price, amount)
 let _lastTrades = [];  // 필터(기간/종목/승패)가 적용되기 전 원본 거래 목록 캐시
+let _symbolNames = {{}};  // "BTC/KRW" → "비트코인 (BTC)" — /api/symbol-names에서 1회 fetch해 캐시
+// "BTC/KRW" → "비트코인 (BTC)". 매핑에 없는 심볼(비정상 마켓 등)은 "/KRW"만 제거한
+// 문자열로 안전하게 폴백한다. Mirrors _symbol_label() in the server-side Python above.
+function symLabel(sym) {{
+  return _symbolNames[sym] || sym.replace('/KRW', '');
+}}
 async function refresh() {{
   try {{
     const [s, pos, pnl, trades, stats, eq, bal, ticks, strat, pendingParams] = await Promise.all([
@@ -932,7 +957,7 @@ function renderPositions(positions) {{
     const pnlColor = pnl >= 0 ? 'var(--signal-buy)' : 'var(--signal-sell)';
     const pnlStr = `<span style="color:${{pnlColor}};font-weight:var(--fw-medium)">₩${{Math.round(pnl).toLocaleString('ko-KR',{{signDisplay:'always'}})}} (${{pnlPct >= 0 ? '+' : ''}}${{pnlPct.toFixed(2)}}%)</span>`;
     return `<tr>
-      <td><code>${{p.symbol}}</code></td>
+      <td><code>${{symLabel(p.symbol)}}</code></td>
       <td>${{(p.side||'').toUpperCase()}}</td>
       <td style="color:var(--text-muted)">${{p.amount != null ? p.amount.toFixed(4) : '-'}}</td>
       <td style="font-weight:var(--fw-medium)">${{fmtKRW(p.entry_price)}}</td>
@@ -966,15 +991,26 @@ async function refreshPositionsTrades() {{
     if (mainTabs[2]) mainTabs[2].textContent = `오픈 포지션 (${{(pos||[]).length}})`;
   }} catch(e) {{ /* silent */ }}
 }}
-// 기간(전체/7일/30일/90일) · 종목 · 승패 필터 — 이미 불러온 _lastTrades 배열 안에서만 필터링(서버 재요청 없음)
+// 기간(오늘/전체/7일/30일/90일) · 종목 · 승패 필터 — 이미 불러온 _lastTrades 배열
+// 안에서만 필터링(서버 재요청 없음)
 function _filterTrades(trades) {{
-  const period = (document.getElementById('filter-period') || {{}}).value || 'all';
+  const period = (document.getElementById('filter-period') || {{}}).value || 'today';
   const symbol = (document.getElementById('filter-symbol') || {{}}).value || 'all';
   const result = (document.getElementById('filter-result') || {{}}).value || 'all';
   const now = Date.now();
   return (trades || []).filter(t => {{
     if (symbol !== 'all' && t.symbol !== symbol) return false;
-    if (period !== 'all') {{
+    if (period === 'today') {{
+      // "오늘"은 롤링 24시간이 아니라 KST(UTC+9) 달력 기준 당일 00:00:00부터다.
+      // src/dashboard/state.py의 realized_pnl_today(KST = timezone(timedelta(hours=9)))와
+      // 동일한 타임존 경계 정의를 쓴다.
+      const ts = t.exit_time || t.entry_time;
+      if (ts) {{
+        const kstNow = new Date(now + 9 * 3600 * 1000);
+        const kstMidnightMs = Date.UTC(kstNow.getUTCFullYear(), kstNow.getUTCMonth(), kstNow.getUTCDate()) - 9 * 3600 * 1000;
+        if (new Date(ts).getTime() < kstMidnightMs) return false;
+      }}
+    }} else if (period !== 'all') {{
       const days = parseInt(period, 10);
       const ts = t.exit_time || t.entry_time;
       if (ts) {{
@@ -990,14 +1026,15 @@ function _filterTrades(trades) {{
     return true;
   }});
 }}
-// 종목 드롭다운 옵션을 실제 거래 데이터에서 동적으로 채운다 (현재 선택값은 유지)
+// 종목 드롭다운 옵션을 실제 거래 데이터에서 동적으로 채운다 (현재 선택값은 유지,
+// value는 필터링용 원본 심볼, 라벨만 한글명으로 표시)
 function _populateSymbolFilter(trades) {{
   const sel = document.getElementById('filter-symbol');
   if (!sel) return;
   const symbols = Array.from(new Set((trades || []).map(t => t.symbol))).sort();
   const current = sel.value;
   sel.innerHTML = '<option value="all">전체 종목</option>' +
-    symbols.map(s => `<option value="${{s}}">${{s}}</option>`).join('');
+    symbols.map(s => `<option value="${{s}}">${{symLabel(s)}}</option>`).join('');
   if (symbols.includes(current)) sel.value = current;
 }}
 // 필터 select 변경 시 호출 — 매수/매도 이력 탭과 탭 카운트를 함께 갱신한다
@@ -1023,7 +1060,7 @@ function renderBuyHistory(trades) {{
       const cost = p.entry_price * p.amount;
       return `<tr>
         <td style="color:var(--text-dim);font-size:var(--fs-3)">${{dt}}</td>
-        <td><code>${{p.symbol}}</code></td>
+        <td><code>${{symLabel(p.symbol)}}</code></td>
         <td style="color:var(--text-muted)">${{p.amount != null ? p.amount.toFixed(6) : '-'}}</td>
         <td style="font-weight:var(--fw-medium);color:var(--signal-buy)">${{fmtKRW(p.entry_price)}}</td>
         <td style="color:var(--text-muted)">${{fmtKRW(cost)}}</td>
@@ -1037,7 +1074,7 @@ function renderBuyHistory(trades) {{
     const cost = t.entry_price * t.amount;
     return `<tr>
       <td style="color:var(--text-dim);font-size:var(--fs-3)">${{dt}}</td>
-      <td><code>${{t.symbol}}</code></td>
+      <td><code>${{symLabel(t.symbol)}}</code></td>
       <td style="color:var(--text-muted)">${{t.amount != null && t.amount.toFixed ? t.amount.toFixed(6) : t.amount}}</td>
       <td style="font-weight:var(--fw-medium);color:var(--signal-buy)">${{fmtKRW(t.entry_price)}}</td>
       <td style="color:var(--text-muted)">${{fmtKRW(cost)}}</td>
@@ -1064,7 +1101,7 @@ function renderSellHistory(trades) {{
     const sign = pnl >= 0 ? '+' : '';
     return `<tr>
       <td style="color:var(--text-dim);font-size:var(--fs-3)">${{dt}}</td>
-      <td><code>${{t.symbol}}</code></td>
+      <td><code>${{symLabel(t.symbol)}}</code></td>
       <td style="color:var(--text-muted)">${{t.amount.toFixed ? t.amount.toFixed(6) : t.amount}}</td>
       <td style="font-weight:var(--fw-medium);color:var(--signal-sell)">${{fmtKRW(t.exit_price)}}</td>
       <td style="color:${{cls}};font-weight:var(--fw-medium)">${{sign}}${{fmtKRW(pnl)}} (${{sign}}${{pct.toFixed(2)}}%)</td>
@@ -1363,7 +1400,7 @@ function showToast(msg) {{
 setInterval(refresh, 30000);
 setInterval(refreshPositionsTrades, 5000);
 // Initialize on load
-(function() {{
+(async function() {{
   // <head>의 동기 스크립트가 이미 반영한 저장된 테마에 토글 아이콘을 맞춘다
   _updateThemeToggleIcon(document.documentElement.getAttribute('data-theme') || 'dark');
   // Seed _ticksMap from server-rendered ticks data
@@ -1371,6 +1408,13 @@ setInterval(refreshPositionsTrades, 5000);
   _initTickStream();
   // Load strategy info immediately
   fetch('/api/strategy').then(r=>r.json()).then(renderStrategy).catch(()=>{{}});
+  // 종목 한글명 맵은 페이지 로드 시 한 번만 fetch해 캐시한다(심볼은 자주 바뀌지
+  // 않음) — refreshPositionsTrades() 전에 await해서, 첫 렌더부터 한글명이
+  // 보이고 "티커 → 한글명" 깜빡임이 생기지 않게 한다. 실패해도 symLabel()의
+  // 폴백(티커 표기)으로 안전하게 동작한다.
+  try {{
+    _symbolNames = await fetch('/api/symbol-names').then(r=>r.json());
+  }} catch(e) {{ /* keep fallback ticker labels */ }}
   // Populate positions/trades immediately (don't wait for 5s interval)
   refreshPositionsTrades();
 }})();
@@ -1827,17 +1871,21 @@ def _render_symbol_pnl_svg(trades: list[dict]) -> str:
     return "".join(parts)
 
 
-def _render_trade_filter_bar(trades: list[dict]) -> str:
+def _render_trade_filter_bar(trades: list[dict], symbol_names: dict[str, str]) -> str:
     """Static filter controls (기간/종목/승패) shown above the position/buy/sell tabs.
 
     Filtering itself happens client-side only (_filterTrades() in the JS below)
     against already-fetched trade data — this function only renders the initial
     server-side markup, including symbol <option>s seeded from the first-paint
-    trades list so the dropdown isn't empty before JS runs.
+    trades list so the dropdown isn't empty before JS runs. Default period is
+    "오늘"(today, KST calendar day) — see _filterTrades()'s 'today' branch.
     """
     symbols = sorted({t["symbol"] for t in trades if t.get("symbol")})
-    symbol_options = "".join(f'<option value="{s}">{s}</option>' for s in symbols)
+    symbol_options = "".join(
+        f'<option value="{s}">{_symbol_label(s, symbol_names)}</option>' for s in symbols
+    )
     return f"""<select id="filter-period" onchange="applyTradeFilters()">
+      <option value="today" selected>오늘</option>
       <option value="all">전체 기간</option>
       <option value="7">최근 7일</option>
       <option value="30">최근 30일</option>
@@ -1854,7 +1902,7 @@ def _render_trade_filter_bar(trades: list[dict]) -> str:
     </select>"""
 
 
-def _render_positions(positions: list[dict]) -> str:
+def _render_positions(positions: list[dict], symbol_names: dict[str, str]) -> str:
     if not positions:
         return '<p class="empty">오픈 포지션 없음</p>'
 
@@ -1873,7 +1921,7 @@ def _render_positions(positions: list[dict]) -> str:
         pnl_str = f"<span style='color:{pnl_color};font-weight:var(--fw-medium)'>₩{pnl:+,.0f} ({pnl_pct:+.2f}%)</span>"
         rows.append(
             f"<tr>"
-            f"<td><code>{pos['symbol']}</code></td>"
+            f"<td><code>{_symbol_label(pos['symbol'], symbol_names)}</code></td>"
             f"<td>{pos['side'].upper()}</td>"
             f"<td>{pos['amount']:.4f}</td>"
             f"<td>{pos['entry_price']:,.2f}</td>"
@@ -2099,7 +2147,10 @@ def _render_balance(balance: list[dict]) -> str:
     return grid
 
 
-def _render_buy_history(trades: list[dict], positions: list[dict] | None = None) -> str:
+def _render_buy_history(
+    trades: list[dict], positions: list[dict] | None = None, symbol_names: dict[str, str] | None = None
+) -> str:
+    symbol_names = symbol_names or {}
     rows = []
     # Open positions first (보유중)
     for pos in (positions or []):
@@ -2111,7 +2162,7 @@ def _render_buy_history(trades: list[dict], positions: list[dict] | None = None)
         rows.append(
             f"<tr>"
             f"<td style='color:var(--text-dim);font-size:var(--fs-3)'>{dt}</td>"
-            f"<td><code>{pos['symbol']}</code></td>"
+            f"<td><code>{_symbol_label(pos['symbol'], symbol_names)}</code></td>"
             f"<td style='color:var(--text-muted)'>{pos['amount']:.6f}</td>"
             f"<td style='font-weight:var(--fw-medium);color:var(--signal-buy)'>₩{pos['entry_price']:,.0f}</td>"
             f"<td style='color:var(--text-muted)'>₩{cost:,.0f}</td>"
@@ -2126,7 +2177,7 @@ def _render_buy_history(trades: list[dict], positions: list[dict] | None = None)
         rows.append(
             f"<tr>"
             f"<td style='color:var(--text-dim);font-size:var(--fs-3)'>{entry_dt}</td>"
-            f"<td><code>{t['symbol']}</code></td>"
+            f"<td><code>{_symbol_label(t['symbol'], symbol_names)}</code></td>"
             f"<td style='color:var(--text-muted)'>{t['amount']:.6f}</td>"
             f"<td style='font-weight:var(--fw-medium);color:var(--signal-buy)'>₩{t['entry_price']:,.0f}</td>"
             f"<td style='color:var(--text-muted)'>₩{cost:,.0f}</td>"
@@ -2174,7 +2225,8 @@ def _render_mode_switch_btn(mode: str) -> str:
     )
 
 
-def _render_sell_history(trades: list[dict]) -> str:
+def _render_sell_history(trades: list[dict], symbol_names: dict[str, str] | None = None) -> str:
+    symbol_names = symbol_names or {}
     if not trades:
         return '<p class="empty">매도 이력 없음</p>'
     rows = []
@@ -2186,7 +2238,7 @@ def _render_sell_history(trades: list[dict]) -> str:
         rows.append(
             f"<tr>"
             f"<td style='color:var(--text-dim);font-size:var(--fs-3)'>{exit_dt}</td>"
-            f"<td><code>{t['symbol']}</code></td>"
+            f"<td><code>{_symbol_label(t['symbol'], symbol_names)}</code></td>"
             f"<td style='color:var(--text-muted)'>{t['amount']:.6f}</td>"
             f"<td style='font-weight:var(--fw-medium);color:var(--signal-sell)'>₩{t['exit_price']:,.0f}</td>"
             f"<td class='{cls}'>{sign}₩{pnl:,.0f} ({sign}{t['pnl_pct']:.2f}%)</td>"
