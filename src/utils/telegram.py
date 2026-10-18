@@ -52,6 +52,12 @@ class TelegramClient:
     def is_enabled(self) -> bool:
         return self._enabled
 
+    def set_enabled(self, enabled: bool) -> None:
+        """Runtime on/off switch (e.g. exchange maintenance windows) —
+        independent of whether bot_token/chat_id were configured at startup.
+        """
+        self._enabled = bool(enabled)
+
     # ── Notification level / quiet hours ──────────────────────────────────────
 
     def _suppress_info(self) -> bool:

@@ -12,6 +12,8 @@ Exposes:
   GET  /api/equity          — Cumulative PnL curve (JSON)
   POST /api/engine/pause    — Pause trading
   POST /api/engine/resume   — Resume trading
+  POST /api/telegram/mute   — Silence outgoing Telegram messages
+  POST /api/telegram/unmute — Re-enable Telegram messages
   GET  /api/params/pending  — Auto-tuner's proposed param change + backtest validation, if any
   POST /api/params/approve  — Commit the pending change live (only if it passed validation)
   POST /api/params/reject   — Discard the pending change
@@ -153,6 +155,24 @@ async def resume_engine() -> JSONResponse:
         return JSONResponse({"success": False, "message": "Engine not registered"}, status_code=503)
     state.resume()
     return JSONResponse({"success": True, "message": "Engine resumed"})
+
+
+@app.post("/api/telegram/mute")
+async def mute_telegram() -> JSONResponse:
+    state = get_dashboard_state()
+    if state.engine is None:
+        return JSONResponse({"success": False, "message": "Engine not registered"}, status_code=503)
+    state.mute_telegram()
+    return JSONResponse({"success": True, "message": "Telegram muted"})
+
+
+@app.post("/api/telegram/unmute")
+async def unmute_telegram() -> JSONResponse:
+    state = get_dashboard_state()
+    if state.engine is None:
+        return JSONResponse({"success": False, "message": "Engine not registered"}, status_code=503)
+    state.unmute_telegram()
+    return JSONResponse({"success": True, "message": "Telegram unmuted"})
 
 
 @app.post("/api/engine/set-mode")

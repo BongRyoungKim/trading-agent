@@ -30,6 +30,16 @@ class TestTelegramClientEnabled:
         result = disabled_client.send("hello")
         assert result is False
 
+    def test_set_enabled_false_mutes_a_configured_client(self, client: TelegramClient) -> None:
+        client.set_enabled(False)
+        assert client.is_enabled is False
+        assert client.send("hello") is False
+
+    def test_set_enabled_true_unmutes(self, client: TelegramClient) -> None:
+        client.set_enabled(False)
+        client.set_enabled(True)
+        assert client.is_enabled is True
+
 
 class TestTelegramClientSend:
     def test_send_success(self, client: TelegramClient) -> None:

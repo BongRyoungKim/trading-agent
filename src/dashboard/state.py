@@ -419,6 +419,18 @@ class DashboardState:
         if eng is not None:
             eng.resume()
 
+    def mute_telegram(self) -> None:
+        """Silence outgoing Telegram messages (e.g. during known exchange
+        maintenance windows) — independent of trading pause/resume."""
+        eng = self.engine
+        if eng is not None:
+            eng._telegram.set_enabled(False)  # noqa: SLF001
+
+    def unmute_telegram(self) -> None:
+        eng = self.engine
+        if eng is not None:
+            eng._telegram.set_enabled(True)  # noqa: SLF001
+
 
 _state = DashboardState()
 

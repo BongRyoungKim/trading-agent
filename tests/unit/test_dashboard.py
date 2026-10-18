@@ -261,6 +261,28 @@ class TestDashboardState:
         state.resume()
         eng.resume.assert_called_once()
 
+    def test_mute_telegram_delegates_to_engine(self) -> None:
+        state = self._state()
+        eng = self._mock_engine()
+        state.register_engine(eng)
+        state.mute_telegram()
+        eng._telegram.set_enabled.assert_called_once_with(False)
+
+    def test_unmute_telegram_delegates_to_engine(self) -> None:
+        state = self._state()
+        eng = self._mock_engine()
+        state.register_engine(eng)
+        state.unmute_telegram()
+        eng._telegram.set_enabled.assert_called_once_with(True)
+
+    def test_mute_telegram_noop_without_engine(self) -> None:
+        state = self._state()
+        state.mute_telegram()  # must not raise
+
+    def test_unmute_telegram_noop_without_engine(self) -> None:
+        state = self._state()
+        state.unmute_telegram()  # must not raise
+
     def test_get_symbol_display_names_empty_without_engine(self) -> None:
         state = self._state()
         assert state.get_symbol_display_names() == {}
@@ -1062,6 +1084,46 @@ class TestFastAPIRoutes:
         resp = client.post("/api/engine/pause")
         assert resp.status_code == 200
         eng.pause.assert_called_once()
+
+    def test_post_telegram_mute_no_engine_returns_503(self, client) -> None:
+        resp = client.post("/api/telegram/mute")
+        assert resp.status_code == 503
+
+    def test_post_telegram_unmute_no_engine_returns_503(self, client) -> None:
+        resp = client.post("/api/telegram/unmute")
+        assert resp.status_code == 503
+
+    def test_post_telegram_mute_with_engine_returns_200(self, client) -> None:
+        state = get_dashboard_state()
+        eng = MagicMock()
+        eng.mode = "paper"
+        eng.is_paused = False
+        eng.circuit_breaker.state.name = "CLOSED"
+        eng.market_hours.enabled = False
+        eng.market_hours.trading_hours = "00:00-23:59"
+        eng.market_hours.trading_days = "mon-sun"
+        eng._portfolio.pnl_report.return_value = {"cash": 10000, "realized_pnl": 0, "open_positions": 0}  # noqa: SLF001
+        eng._portfolio.open_symbols.return_value = []  # noqa: SLF001
+        state.register_engine(eng)
+        resp = client.post("/api/telegram/mute")
+        assert resp.status_code == 200
+        eng._telegram.set_enabled.assert_called_once_with(False)  # noqa: SLF001
+
+    def test_post_telegram_unmute_with_engine_returns_200(self, client) -> None:
+        state = get_dashboard_state()
+        eng = MagicMock()
+        eng.mode = "paper"
+        eng.is_paused = False
+        eng.circuit_breaker.state.name = "CLOSED"
+        eng.market_hours.enabled = False
+        eng.market_hours.trading_hours = "00:00-23:59"
+        eng.market_hours.trading_days = "mon-sun"
+        eng._portfolio.pnl_report.return_value = {"cash": 10000, "realized_pnl": 0, "open_positions": 0}  # noqa: SLF001
+        eng._portfolio.open_symbols.return_value = []  # noqa: SLF001
+        state.register_engine(eng)
+        resp = client.post("/api/telegram/unmute")
+        assert resp.status_code == 200
+        eng._telegram.set_enabled.assert_called_once_with(True)  # noqa: SLF001
 
     def test_get_symbol_names_returns_dict(self, client) -> None:
         resp = client.get("/api/symbol-names")
