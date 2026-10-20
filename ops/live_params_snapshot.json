@@ -31,11 +31,11 @@
       "tp_rr_multiplier": 3.0,
       "time_stop_minutes": 300.0,
       "time_stop_loss_pct": 0.5,
-      "position_size_pct": 0.15,
+      "position_size_pct": 0.2,
       "consecutive_loss_limit": 3,
       "consecutive_loss_cooldown_minutes": 720,
-      "position_size_pct_downtrend": 0.15
+      "position_size_pct_downtrend": 0.2
     }
   },
-  "synced_at": "2026-10-13T00:01:39+09:00"
+  "synced_at": "2026-10-20T09:57:55+09:00"
 }
