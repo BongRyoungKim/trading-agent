@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.dashboard.state import DashboardState, get_dashboard_state
-from src.dashboard.templates import _render_equity_svg, _render_symbol_pnl_svg, render_dashboard
+from src.dashboard.templates import (
+    _render_balance,
+    _render_equity_svg,
+    _render_symbol_pnl_svg,
+    render_dashboard,
+)
 
 
 # ── DashboardState ────────────────────────────────────────────────────────────
@@ -756,6 +761,27 @@ class TestRenderDashboard:
         )
         assert "KRW" in html
         assert "background:#0f172a" not in html
+
+    def test_html_balance_marks_symbol_not_in_bot_positions_as_manual(self) -> None:
+        """봇이 추적하지 않는 잔고(수동 매수 코인)는 '수동보유' 배지로 구분되고,
+        봇이 open position으로 들고 있는 코인에는 배지가 붙지 않아야 한다."""
+        balance = [
+            {"currency": "XRP", "free": 300.0, "used": 0.0, "price": 1739.0,
+             "avg_buy_price": 1700.0, "buy_amount": 510000, "eval_amount": 521700},
+            {"currency": "LINK", "free": 12.67, "used": 0.0, "price": 15180.0,
+             "avg_buy_price": 15340.0, "buy_amount": 194422, "eval_amount": 192394},
+        ]
+        html = _render_balance(balance, positions=[{"symbol": "LINK/KRW"}])
+        assert html.count("수동보유") == 1
+        # 배지는 XRP 카드(첫 번째) 안에만 위치해야 한다 — LINK 카드 앞에 나와야 함
+        assert html.index("XRP") < html.index("수동보유") < html.index("LINK")
+
+    def test_html_balance_js_render_uses_positions_map_for_manual_badge(self) -> None:
+        """클라이언트 측 renderBalance()도 서버 렌더와 동일하게 _positionsMap 기준으로
+        '수동보유' 배지를 붙이는지 확인한다(서버/클라이언트 이중 렌더 패턴)."""
+        html = render_dashboard(self._status(), [], {})
+        assert "const manualBadge = " in html
+        assert "const isManual = !Object.prototype.hasOwnProperty.call(_positionsMap" in html
 
     # ── 이모지 → 절제된 라인 아이콘 교체 회귀 테스트 ───────────────────────
     def test_html_replaces_target_emojis_with_svg_icons(self) -> None:

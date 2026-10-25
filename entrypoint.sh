@@ -25,5 +25,5 @@ exec python -m src.main \
   --top-symbols 12 \
   --trailing-stop-pct 2.0 \
   --heartbeat-interval 10800 \
-  --exclude-symbols DOGE/KRW ELSA/KRW DOOD/KRW RE/KRW KAITO/KRW USDT/KRW \
+  --exclude-symbols DOGE/KRW ELSA/KRW DOOD/KRW RE/KRW KAITO/KRW USDT/KRW XRP/KRW \
   --skip-checks

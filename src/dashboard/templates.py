@@ -149,7 +149,7 @@ def render_dashboard(
     sell_html = _render_sell_history(trades, symbol_names)
     pnl_html = _render_pnl(pnl)
     pending_params_html = _render_pending_params(pending_params)
-    balance_html = _render_balance(balance)
+    balance_html = _render_balance(balance, positions)
     ticks_html = _render_ticks(ticks, symbol_names)
     # Seed the client-side _ticksMap with server-rendered data so the table is
     # immediately populated and SSE updates are merged into it.
@@ -885,11 +885,14 @@ function renderBalance(items) {{
     if (pnlPct < -0.1) return {{border: 'var(--signal-sell)', bg: 'var(--signal-sell-bg)', icon: '▼', iconColor: 'var(--signal-sell)'}};
     return {{border: 'var(--signal-warn)', bg: 'var(--signal-warn-bg)', icon: '－', iconColor: 'var(--signal-warn)'}};
   }};
+  const manualBadge = '<span style="background:var(--bg-inset);color:var(--text-muted);border:1px solid var(--border);padding:.05rem .4rem;border-radius:9999px;font-size:var(--fs-1);font-weight:var(--fw-strong);margin-left:.4rem">수동보유</span>';
   const cards = items.map(b => {{
     const avgBuy = b.avg_buy_price || 0;
     const style = cardStyle(avgBuy, b.price || 0);
     const iconHtml = style.icon
       ? `<span style="color:${{style.iconColor}};font-size:var(--fs-2);margin-right:.35rem">${{style.icon}}</span>` : '';
+    const isManual = !Object.prototype.hasOwnProperty.call(_positionsMap, `${{b.currency}}/KRW`);
+    const badgeHtml = isManual ? manualBadge : '';
     const usedRow = b.used > 0
       ? `<div style="${{rowStyle}}">
            <span style="${{labelStyle}}">주문중</span>
@@ -905,7 +908,7 @@ function renderBalance(items) {{
     }}
     return `<div style="background:${{style.bg}};border:1px solid ${{style.border}};border-left:3px solid ${{style.border}};border-radius:.6rem;padding:.9rem">
       <div style="font-size:var(--fs-5);font-weight:var(--fw-strong);color:var(--text-strong);margin-bottom:.65rem;display:flex;justify-content:space-between;align-items:baseline">
-        <span>${{iconHtml}}${{b.currency}}</span>
+        <span>${{iconHtml}}${{b.currency}}${{badgeHtml}}</span>
         <span style="${{valueBase}};font-size:var(--fs-1);font-weight:var(--fw-regular);color:var(--text-muted)">${{fmtQty(b.free)}}</span>
       </div>
       ${{usedRow}}
@@ -2048,9 +2051,16 @@ def _balance_card_style(avg_buy_price: float, price: float) -> tuple[str, str, s
     return "var(--signal-warn)", "var(--signal-warn-bg)", "－", "var(--signal-warn)"
 
 
-def _render_balance(balance: list[dict]) -> str:
+def _render_balance(balance: list[dict], positions: list[dict] | None = None) -> str:
     if not balance:
         return '<p class="empty">잔고 없음</p>'
+
+    bot_symbols = {p["symbol"] for p in (positions or [])}
+    manual_badge = (
+        '<span style="background:var(--bg-inset);color:var(--text-muted);'
+        'border:1px solid var(--border);padding:.05rem .4rem;border-radius:9999px;'
+        'font-size:var(--fs-1);font-weight:var(--fw-strong);margin-left:.4rem">수동보유</span>'
+    )
 
     # 라벨/값 스타일을 카드 전체에서 통일한다 (요구사항: 라벨 1단계, 값 최대 2단계 + tabular-nums 우측정렬)
     label_style = "color:var(--text-muted);font-size:var(--fs-2);white-space:nowrap;flex-shrink:0"
@@ -2073,6 +2083,8 @@ def _render_balance(balance: list[dict]) -> str:
             f'<span style="color:{icon_color};font-size:var(--fs-2);margin-right:.35rem">{pnl_icon}</span>'
             if pnl_icon else ""
         )
+        is_manual = f"{currency}/KRW" not in bot_symbols
+        badge_html = manual_badge if is_manual else ""
 
         fmt_qty = f"{free:.8f}".rstrip("0").rstrip(".")
         fmt_price = f"₩{price:,.0f}" if price >= 1 else f"₩{price:.6f}"
@@ -2108,7 +2120,7 @@ def _render_balance(balance: list[dict]) -> str:
             f'border-left:3px solid {border_color};border-radius:.6rem;padding:.9rem">'
             f'<div style="font-size:var(--fs-5);font-weight:var(--fw-strong);color:var(--text-strong);margin-bottom:.65rem;'
             f'display:flex;justify-content:space-between;align-items:baseline">'
-            f'<span>{icon_html}{currency}</span>'
+            f'<span>{icon_html}{currency}{badge_html}</span>'
             f'<span style="{value_base};font-size:var(--fs-1);font-weight:var(--fw-regular);color:var(--text-muted)">{fmt_qty}</span>'
             f'</div>'
             f'{used_row}'
