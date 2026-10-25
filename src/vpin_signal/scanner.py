@@ -46,6 +46,14 @@ class VPINScannerConfig:
     max_concurrent_positions: int = 5
     atr_period: int = 14
     binance_fetch_limit: int = 260  # MIN_BARS_REQUIRED(240)보다 여유있게 조회
+    # 2026-10-25 백테스트(scripts/vpin_backtest.py, 7개월 train+validation,
+    # 1개월 holdout)에서 검증 — vpin_threshold의 quantile을 0.9(QUANTILE
+    # 기본값)에서 0.93으로 올리면 train/validation 양쪽 모두에서 수익성
+    # 개선(결합 수익률 -3.12% -> +3.58%, PF 0.98 -> 1.03, 거래수 780 -> 725).
+    # holdout은 baseline과 대등(둘 다 호황 구간, PF는 0.93이 근소 우위).
+    # QUANTILE(signal.py 기본값, 0.9)은 그대로 두고 여기서만 재정의 —
+    # compute_vpin_features()/latest_row()의 기본값은 하위호환 유지.
+    vpin_quantile: float = 0.93
 
 
 def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -173,7 +181,7 @@ class VPINScanner:
                 logger.warning("VPIN: Binance fetch failed", symbol=binance_sym, error=str(exc))
                 continue
 
-            row = latest_row(bdf)
+            row = latest_row(bdf, quantile=cfg.vpin_quantile)
             if row is None:
                 continue
             if row["vpin"] > row["vpin_threshold"] and row["net_delta_window"] > 0:

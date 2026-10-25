@@ -34,6 +34,19 @@ class TestComputeVpinFeatures:
         truncated = compute_vpin_features(df.iloc[:250])
         assert full["vpin"].iloc[249] == pytest.approx(truncated["vpin"].iloc[249])
 
+    def test_quantile_defaults_to_module_constant(self) -> None:
+        df = _make_binance_df(300)
+        default_call = compute_vpin_features(df)
+        explicit_call = compute_vpin_features(df, quantile=0.9)
+        pd.testing.assert_series_equal(default_call["vpin_threshold"], explicit_call["vpin_threshold"])
+
+    def test_higher_quantile_raises_the_threshold(self) -> None:
+        df = _make_binance_df(300, seed=7)
+        low_q = compute_vpin_features(df, quantile=0.9)
+        high_q = compute_vpin_features(df, quantile=0.97)
+        valid = low_q["vpin_threshold"].notna() & high_q["vpin_threshold"].notna()
+        assert (high_q.loc[valid, "vpin_threshold"] >= low_q.loc[valid, "vpin_threshold"]).all()
+
 
 class TestLatestSignal:
     def test_none_when_insufficient_history(self) -> None:
@@ -62,3 +75,16 @@ class TestLatestSignal:
         df.loc[df.index[-WINDOW:], "delta"] = -5000.0
         df.loc[df.index[-WINDOW:], "volume"] = 5500.0
         assert latest_signal(df) is False
+
+    def test_higher_quantile_can_flip_a_borderline_signal_to_false(self) -> None:
+        # 완만한 쏠림 -- q=0.9에서는 신호가 뜨지만 q=1.0(= 과거 200봉 중
+        # 최댓값을 '초과'해야만 통과, 현재값==최댓값이라 '초과'를 만족 못함)
+        # 에서는 같은 데이터로도 신호가 꺼질 수 있어야 한다.
+        n = MIN_BARS_REQUIRED + 10
+        df = _make_binance_df(n, volume=1000.0, delta=0.0, seed=4)
+        df.loc[df.index[-WINDOW:], "delta"] = 1200.0
+        df.loc[df.index[-WINDOW:], "volume"] = 1300.0
+        baseline = latest_signal(df, quantile=0.9)
+        stricter = latest_signal(df, quantile=1.0)
+        assert baseline is True
+        assert stricter is False

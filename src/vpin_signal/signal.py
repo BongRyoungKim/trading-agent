@@ -19,33 +19,38 @@ VPIN_THRESHOLD_LOOKBACK = 200
 MIN_BARS_REQUIRED = VPIN_THRESHOLD_LOOKBACK + WINDOW  # 임계값 계산용 워밍업 포함
 
 
-def compute_vpin_features(binance_df: pd.DataFrame, window: int = WINDOW) -> pd.DataFrame:
+def compute_vpin_features(binance_df: pd.DataFrame, window: int = WINDOW, quantile: float = QUANTILE) -> pd.DataFrame:
     """binance_df: columns=[timestamp, volume, delta](delta=taker_buy-taker_sell).
-    미래 데이터를 참조하지 않는 rolling 계산만 사용(룩어헤드 없음)."""
+    미래 데이터를 참조하지 않는 rolling 계산만 사용(룩어헤드 없음).
+
+    `quantile` — 2026-10-25 추가. `vpin_threshold`를 계산하는 rolling
+    quantile 값. 기본값(QUANTILE=0.9)은 기존 호출부(scanner.py 등)와
+    100% 하위호환 — 파라미터 스윕 백테스트(scripts/vpin_backtest.py)
+    전용으로 추가됨."""
     df = binance_df.copy()
     total = df["volume"].rolling(window).sum()
     imbalance = df["delta"].abs().rolling(window).sum()
     df["vpin"] = imbalance / total.replace(0, pd.NA)
-    df["vpin_threshold"] = df["vpin"].rolling(VPIN_THRESHOLD_LOOKBACK, min_periods=50).quantile(QUANTILE)
+    df["vpin_threshold"] = df["vpin"].rolling(VPIN_THRESHOLD_LOOKBACK, min_periods=50).quantile(quantile)
     df["net_delta_window"] = df["delta"].rolling(window).sum()
     return df
 
 
-def latest_signal(binance_df: pd.DataFrame, window: int = WINDOW) -> bool | None:
+def latest_signal(binance_df: pd.DataFrame, window: int = WINDOW, quantile: float = QUANTILE) -> bool | None:
     """가장 최근 봉의 '정보성 매수 흡수' 신호. 워밍업 부족 시 None."""
-    row = latest_row(binance_df, window)
+    row = latest_row(binance_df, window, quantile)
     if row is None:
         return None
     return bool(row["vpin"] > row["vpin_threshold"] and row["net_delta_window"] > 0)
 
 
-def latest_row(binance_df: pd.DataFrame, window: int = WINDOW) -> pd.Series | None:
+def latest_row(binance_df: pd.DataFrame, window: int = WINDOW, quantile: float = QUANTILE) -> pd.Series | None:
     """가장 최근 봉의 전체 피처 행(vpin 수치 포함) — 여러 종목이 동시에
     신호를 낼 때 vpin 크기로 우선순위를 매기는 용도(scanner.py). 워밍업
     부족 시 None."""
     if len(binance_df) < MIN_BARS_REQUIRED:
         return None
-    featured = compute_vpin_features(binance_df, window)
+    featured = compute_vpin_features(binance_df, window, quantile)
     last = featured.iloc[-1]
     if pd.isna(last["vpin"]) or pd.isna(last["vpin_threshold"]) or pd.isna(last["net_delta_window"]):
         return None

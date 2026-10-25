@@ -127,6 +127,39 @@ class TestRefreshSignalAndScan:
 
         assert scanner.open_symbols == []
 
+    def test_default_vpin_quantile_is_2026_10_25_backtest_value(self) -> None:
+        # 2026-10-25 백테스트(scripts/vpin_backtest.py)에서 검증된 값(0.93)
+        # 으로 기본값이 바뀌었는지 — 회귀 방지.
+        assert VPINScannerConfig().vpin_quantile == 0.93
+
+    def test_stricter_vpin_quantile_can_suppress_a_borderline_entry(self) -> None:
+        # 완만한 쏠림 -- 기본 quantile(0.93)에서는 진입하지만 더 엄격한
+        # quantile(1.0)로 설정하면 같은 데이터에서도 진입하지 않아야 한다
+        # (scanner_cfg.vpin_quantile이 실제로 latest_row()에 전달되는지 확인).
+        rng = np.random.default_rng(0)
+        n = MIN_BARS_REQUIRED + 10
+        timestamps = pd.date_range("2024-01-01", periods=n, freq="15min", tz="UTC")
+        volumes = np.full(n, 1000.0) + rng.normal(0, 1, n)
+        deltas = rng.normal(0, 1, n)
+        df = pd.DataFrame({"timestamp": timestamps, "volume": volumes, "delta": deltas})
+        df.loc[df.index[-WINDOW:], "delta"] = 1200.0
+        df.loc[df.index[-WINDOW:], "volume"] = 1300.0
+
+        scanner, exchange, telegram, portfolio, fetcher = _make_scanner(
+            scanner_cfg=VPINScannerConfig(
+                symbol_pairs=(("BTC/KRW", "BTCUSDT"), ("ETH/KRW", "ETHUSDT")),
+                position_size_krw=Decimal("100000"), max_concurrent_positions=2,
+                vpin_quantile=1.0,
+            )
+        )
+        fetcher.return_value = df
+        exchange.get_ohlcv.return_value = [_make_bar(1000.0) for _ in range(20)]
+        exchange.get_ticker.return_value = _make_ticker("BTC/KRW", 1000.0)
+
+        scanner.refresh_signal_and_scan()
+
+        assert scanner.open_symbols == []
+
 
 def _make_risk_manager(initial_capital=Decimal("1000000"), **kwargs) -> RiskManager:
     settings = types.SimpleNamespace(max_drawdown_halt=0.15, max_daily_loss=0.05, max_open_positions=100)
