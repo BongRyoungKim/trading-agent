@@ -47,8 +47,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--position-size-krw", type=float, default=200_000.0,
                          help="포지션당 페이퍼 매수 금액(KRW)")
     parser.add_argument("--max-concurrent-positions", type=int, default=5)
-    parser.add_argument("--entry-threshold", type=float, default=0.5,
-                         help="모델 예측확률이 이 값을 넘으면 진입 (리서치 기본값 0.5)")
+    parser.add_argument("--entry-threshold", type=float, default=0.55,
+                         help="모델 예측확률이 이 값을 넘으면 진입 "
+                              "(리서치 기본값 0.55 — scripts/ml_signal_backtest.py, 2026-10-25 재검증)")
     parser.add_argument("--hold-days", type=int, default=5)
     parser.add_argument("--safety-stop-pct", type=float, default=20.0)
     return parser

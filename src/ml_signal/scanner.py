@@ -46,7 +46,14 @@ class MLSignalScannerConfig:
     symbols: tuple[str, ...] = DEFAULT_SYMBOLS
     position_size_krw: Decimal = Decimal("200000")   # 페이퍼 계좌 — 실제 자금 아님
     max_concurrent_positions: int = 5
-    entry_threshold: float = 0.5   # 리서치(2026-09-27)에서 검증된 기본 임계값
+    entry_threshold: float = 0.55  # 리서치(2026-10-25, scripts/ml_signal_backtest.py)로 0.5에서 상향 —
+    # 2026-09-27 기본값(0.5)은 라이브 페이퍼 9건 중 1승(승률 11%)을 겪은 뒤 재검증됨.
+    # train(2023-01~2025-09)/validation(2025-09~2026-03)/holdout(2026-03~2026-10, 1회만 확인)
+    # 전 구간에서 0.5 대비 PF·승률·MDD가 일관되게 개선되고, validation~holdout 구간에서
+    # 0.5는 적자(-44.16%, +1.84%에 그침)인 반면 0.55는 흑자(+6.65%, +21.13%) — 거래량은
+    # 줄지만(표본은 여전히 충분, n=442/70/74) 하락장 구간에서의 견고성이 핵심 개선점.
+    # 동일종목 손실 후 재진입 쿨다운(5/10/20일)은 같은 리서치에서 기각됨(일관된 개선
+    # 방향 없음 — train에서는 중립~악화, validation에서도 여전히 큰 적자).
     ohlcv_fetch_limit: int = 90    # MIN_BARS_REQUIRED(60)보다 여유있게 조회
 
 

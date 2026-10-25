@@ -57,6 +57,13 @@ def _make_scanner(**overrides) -> tuple[MLSignalScanner, MagicMock, MagicMock, P
     return scanner, exchange, telegram, portfolio, model
 
 
+class TestMLSignalScannerConfigDefaults:
+    def test_entry_threshold_default_is_research_validated_0_55(self) -> None:
+        # 2026-10-25 재검증(scripts/ml_signal_backtest.py): train/validation/holdout
+        # 전 구간에서 0.5 대비 PF·승률·MDD가 일관되게 개선 — 0.5로 되돌리는 회귀를 막는다.
+        assert MLSignalScannerConfig().entry_threshold == 0.55
+
+
 class TestRefreshSignalAndScan:
     def test_opens_position_when_probability_above_threshold(self) -> None:
         scanner, exchange, telegram, portfolio, model = _make_scanner()
