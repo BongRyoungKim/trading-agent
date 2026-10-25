@@ -904,6 +904,27 @@ class TestReconciliation:
         exchange.get_ticker.side_effect = RuntimeError("exchange down")
         engine._reconcile_positions(["BTC/USDT"])  # must not raise
 
+    def test_reconcile_skips_blacklisted_external_holding(
+        self, exchange, strategy, risk_manager, portfolio, telegram
+    ):
+        """A manually-held coin (e.g. XRP excluded via --exclude-symbols) must NOT be
+        auto-adopted as a bot-tracked position during reconciliation, even though it
+        shows up as a free exchange balance — otherwise the bot would start managing
+        (and potentially auto-selling) a position the user explicitly wants to trade
+        manually."""
+        s = _make_settings("live")
+        portfolio.open_symbols.return_value = []
+        bal_entry = MagicMock()
+        bal_entry.free = 300.0
+        exchange.get_balance.return_value = {"XRP": bal_entry}
+        exchange.get_ticker.return_value = _make_ticker(1733.0)
+
+        eng = TradingEngine(s, exchange, strategy, risk_manager, portfolio, telegram)
+        eng.symbol_blacklist = ["XRP/KRW"]
+        eng._reconcile_positions(["BTC/USDT"])
+
+        portfolio.open_position.assert_not_called()
+
     def test_reconcile_called_only_in_live_mode(
         self, settings, exchange, strategy, risk_manager, portfolio, telegram
     ):

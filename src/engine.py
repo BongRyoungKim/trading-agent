@@ -1401,6 +1401,12 @@ class TradingEngine:
                     sym = f"{base_coin}/KRW"
                     if sym in local_symbols:
                         continue  # already tracked
+                    if sym in self._symbol_blacklist:
+                        logger.info(
+                            "Reconciliation: skipping blacklisted symbol (manually held)",
+                            symbol=sym,
+                        )
+                        continue
                     free_amount = Decimal(str(bal_entry.free))
                     if free_amount <= Decimal("0"):
                         continue
